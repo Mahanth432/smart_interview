@@ -4,6 +4,7 @@ import prisma from '@/lib/db'
 
 // GET /api/documents — list documents for the logged-in user (private + synced from admin)
 export async function GET(request: Request) {
+  const t0 = performance.now()
   try {
     const response = NextResponse.json({})
     const session = await getAppSession(request, response)
@@ -11,10 +12,14 @@ export async function GET(request: Request) {
     if (!session?.isLoggedIn || !session.userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+    if (session.role === 'CANDIDATE') {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
 
     // Build base where clause — always filter by userId (ownership)
     const where: { userId: number } = { userId: session.userId }
 
+    const tQuery0 = performance.now()
     const documents = await prisma.document.findMany({
       where,
       orderBy: { createdAt: 'desc' },
@@ -22,6 +27,7 @@ export async function GET(request: Request) {
         _count: { select: { chunks: true } },
       },
     })
+    const tQueryEnd = performance.now()
 
     const safe = documents.map((d) => ({
       id: d.id,
@@ -36,6 +42,10 @@ export async function GET(request: Request) {
       updatedAt: d.updatedAt,
       chunkCount: d._count.chunks,
     }))
+
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[DEV TIMING] API GET /api/documents: query=${(tQueryEnd - tQuery0).toFixed(1)}ms, total=${(performance.now() - t0).toFixed(1)}ms`)
+    }
 
     return NextResponse.json({ documents: safe })
   } catch (err) {
@@ -52,6 +62,9 @@ export async function POST(request: Request) {
 
     if (!session?.isLoggedIn || !session.userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+    if (session.role === 'CANDIDATE') {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 
     const form = await request.formData()

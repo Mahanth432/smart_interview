@@ -15,6 +15,9 @@ export async function DELETE(
     if (!session?.isLoggedIn || !session.userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+    if (session.role === 'CANDIDATE') {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
 
     const { id: idStr } = await context.params
     const id = parseInt(idStr, 10)

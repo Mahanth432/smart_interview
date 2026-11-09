@@ -61,7 +61,6 @@ export interface RecentSession {
 export interface AppState {
   activeScreen: string
   currentInterviewer: string
-  selectedLLM: string
   difficulty: string
   isVoiceActive: boolean
   isRecording: boolean

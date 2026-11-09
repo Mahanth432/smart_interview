@@ -21,7 +21,7 @@ export async function determineNextQuestionParams(sessionId: string) {
 
   if (lastQuestion?.answer?.evaluation) {
     const lastScore = lastQuestion.answer.evaluation.score;
-    // Basic Adaptive Difficulty Logic
+    // Adaptive Difficulty Stepping Logic
     if (lastScore >= 80 && currentDifficulty !== "expert") {
       if (currentDifficulty === "easy") currentDifficulty = "medium";
       else if (currentDifficulty === "medium") currentDifficulty = "hard";
@@ -39,11 +39,46 @@ export async function determineNextQuestionParams(sessionId: string) {
     data: { difficulty: currentDifficulty }
   });
 
+  // Extract prior questions (excluding the current question that was just answered)
+  const priorAnsweredQuestions = session.questions.filter(
+    q => q.answer && q.id !== lastQuestion?.id
+  );
+
+  const earlierContextLines = priorAnsweredQuestions.map(q => {
+    const scoreText = q.answer?.evaluation?.score !== undefined ? `${q.answer.evaluation.score}/100` : "unscored";
+    const transcriptSnippet = q.answer?.transcript
+      ? (q.answer.transcript.length > 120 ? q.answer.transcript.slice(0, 120) + "..." : q.answer.transcript)
+      : "No answer recorded";
+    return `[Q${q.questionNumber}: "${q.content}"] -> Answer: "${transcriptSnippet}" (Score: ${scoreText})`;
+  });
+
+  const earlierContextText = earlierContextLines.length > 0
+    ? earlierContextLines.join("\n")
+    : "None (This is the first evaluated question in this session)";
+
+  const uniqueWeakConcepts = Array.from(new Set(session.gaps.map(g => g.concept).filter(Boolean)));
+
   return {
     difficulty: currentDifficulty,
     previousQuestions: session.questions.map(q => q.content),
-    weakConcepts: session.gaps.map(g => g.concept),
-    // Additional state can be retrieved here (topics, scope)
+    weakConcepts: uniqueWeakConcepts,
+    earlierContextText,
+    sessionHistory: priorAnsweredQuestions.map(q => ({
+      questionNumber: q.questionNumber,
+      question: q.content,
+      answer: q.answer?.transcript || "",
+      score: q.answer?.evaluation?.score ?? null,
+      feedback: q.answer?.evaluation?.feedback ?? null
+    })),
+    lastQuestion: lastQuestion ? {
+      id: lastQuestion.id,
+      content: lastQuestion.content,
+      type: lastQuestion.type,
+      difficulty: lastQuestion.difficulty,
+      topic: lastQuestion.topic,
+      expectedAnswer: lastQuestion.expectedAnswer
+    } : null,
+    lastEvaluation: lastQuestion?.answer?.evaluation || null
   };
 }
 

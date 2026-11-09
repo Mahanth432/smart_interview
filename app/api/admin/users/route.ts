@@ -4,6 +4,7 @@ import prisma from '@/lib/db'
 import { Prisma } from '@prisma/client'
 
 export async function GET(request: Request) {
+  const t0 = performance.now()
   try {
     const response = NextResponse.json({})
     const session = await getAppSession(request, response)
@@ -32,6 +33,7 @@ export async function GET(request: Request) {
       where.role = role
     }
 
+    const tQuery0 = performance.now()
     const [total, users] = await Promise.all([
       prisma.user.count({ where }),
       prisma.user.findMany({
@@ -53,6 +55,11 @@ export async function GET(request: Request) {
         take: limit,
       }),
     ])
+    const tQueryEnd = performance.now()
+
+    if (process.env.NODE_ENV === 'development') {
+      console.log(`[DEV TIMING] API GET /api/admin/users: query=${(tQueryEnd - tQuery0).toFixed(1)}ms, total=${(performance.now() - t0).toFixed(1)}ms`)
+    }
 
     return NextResponse.json({
       users,

@@ -62,7 +62,11 @@ export const KnowledgeBaseClient = () => {
     }
   }, [])
 
+  const fetchedRef = React.useRef(false)
+
   useEffect(() => {
+    if (fetchedRef.current) return
+    fetchedRef.current = true
     fetchDocs()
     fetchAdminKBStatus()
   }, [fetchDocs, fetchAdminKBStatus])
@@ -161,52 +165,27 @@ export const KnowledgeBaseClient = () => {
   }
 
   const statusBadge = (status: string) => {
-    const colors: Record<string, string> = {
-      UPLOADED: 'rgba(99, 102, 241, 0.1)',
-      PROCESSING: 'rgba(245, 158, 11, 0.1)',
-      PROCESSED: 'rgba(16, 185, 129, 0.15)',
-      FAILED: 'rgba(239, 68, 68, 0.1)',
+    const map: Record<string, { cls: string; label: string }> = {
+      UPLOADED: { cls: 'zentra-badge-info', label: 'Uploaded' },
+      PROCESSING: { cls: 'zentra-badge-warning', label: 'Processing' },
+      PROCESSED: { cls: 'zentra-badge-success', label: 'Processed' },
+      FAILED: { cls: 'zentra-badge-error', label: 'Failed' },
     }
-    const textColors: Record<string, string> = {
-      UPLOADED: '#818cf8',
-      PROCESSING: '#fbbf24',
-      PROCESSED: '#10b981',
-      FAILED: '#ef4444',
-    }
-    return (
-      <span style={{
-        background: colors[status] ?? 'rgba(100,116,139,0.2)',
-        color: textColors[status] ?? '#94a3b8',
-        borderRadius: '12px',
-        padding: '4px 12px',
-        fontSize: '0.75rem',
-        fontWeight: 600,
-        border: `1px solid ${colors[status] ?? 'rgba(100,116,139,0.2)'}`,
-      }}>
-        {status}
-      </span>
-    )
+    const item = map[status] || { cls: 'zentra-badge-neutral', label: status }
+    return <span className={`zentra-badge ${item.cls}`}>{item.label}</span>
   }
 
   const sourceBadge = (docSource: string) => {
     if (docSource === 'SYNCED_FROM_ADMIN') {
       return (
-        <span style={{
-          background: 'rgba(59,130,246,0.1)', color: '#60a5fa', borderRadius: '8px',
-          padding: '2px 8px', fontSize: '0.7rem', fontWeight: 600,
-          border: '1px solid rgba(59,130,246,0.2)', whiteSpace: 'nowrap'
-        }}>
-          📥 Admin KB
+        <span className="zentra-badge zentra-badge-info" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+          <Icon name="cloud_download" size={13} /> Admin Master
         </span>
       )
     }
     return (
-      <span style={{
-        background: 'rgba(168,85,247,0.1)', color: '#c084fc', borderRadius: '8px',
-        padding: '2px 8px', fontSize: '0.7rem', fontWeight: 600,
-        border: '1px solid rgba(168,85,247,0.2)', whiteSpace: 'nowrap'
-      }}>
-        🔒 Private
+      <span className="zentra-badge zentra-badge-neutral" style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+        <Icon name="lock" size={13} /> Private
       </span>
     )
   }
@@ -218,176 +197,249 @@ export const KnowledgeBaseClient = () => {
   const processedDocs = docs.filter(d => d.status === 'PROCESSED').length
 
   return (
-    <div style={{ padding: '2rem', color: 'var(--color-text-primary)', background: 'transparent', minHeight: '100%', fontFamily: 'var(--font-body)' }}>
+    <div style={{ maxWidth: '1440px', margin: '0 auto', display: 'flex', flexDirection: 'column', gap: '1.75rem' }}>
       {/* Header Section */}
-      <div className="kb-header-flex" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>
-        <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
-          <div style={{ padding: '0.85rem', background: 'rgba(99, 102, 241, 0.1)', borderRadius: '14px', border: '1px solid rgba(99,102,241,0.2)', color: '#818cf8', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <Icon name="description" size={28} />
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1.25rem' }}>
+        <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', marginBottom: '0.35rem' }}>
+            <h1 className="zentra-page-title" style={{ margin: 0 }}>Knowledge Base</h1>
+            <span className="zentra-badge zentra-badge-neutral">RAG Corpus</span>
           </div>
-          <div>
-            <h1 style={{ fontSize: '1.75rem', margin: '0 0 0.25rem 0', fontWeight: 600, color: 'var(--color-text-primary)' }}>Knowledge Base</h1>
-            <p style={{ margin: 0, color: 'var(--color-text-secondary)', fontSize: '0.9rem', maxWidth: '600px', lineHeight: 1.5 }}>
-              Manage your private documents and sync the Admin Master KB. Documents are chunked for RAG retrieval.
-            </p>
-          </div>
+          <p className="zentra-page-subtitle" style={{ margin: 0 }}>
+            Manage private technical documents and sync the Admin Master KB for contextual AI question generation.
+          </p>
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: '0.75rem' }}>
-          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap', justifyContent: 'flex-end' }}>
-            {/* Fetch Knowledge Base button */}
-            <button
-              onClick={handleFetchKB}
-              disabled={fetchingKB || loading}
-              style={{
-                display: 'flex', alignItems: 'center', gap: '0.5rem',
-                background: fetchingKB ? 'rgba(59,130,246,0.3)' : 'linear-gradient(135deg, #3b82f6 0%, #2563eb 100%)',
-                padding: '0.75rem 1.25rem', borderRadius: '10px',
-                color: 'white', fontWeight: 500, cursor: fetchingKB ? 'not-allowed' : 'pointer',
-                border: 'none', fontSize: '0.9rem',
-                boxShadow: '0 4px 14px rgba(59, 130, 246, 0.25)',
-                transition: 'all 0.2s ease', opacity: fetchingKB ? 0.7 : 1
-              }}
-            >
-              <Icon name="download" size={18} />
-              {fetchingKB ? 'Fetching...' : 'Fetch Knowledge Base'}
-            </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+          {/* Fetch Knowledge Base pill */}
+          <button
+            onClick={handleFetchKB}
+            disabled={fetchingKB || loading}
+            className="zentra-btn zentra-btn-secondary"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', opacity: fetchingKB ? 0.7 : 1 }}
+          >
+            <Icon name="cloud_download" size={16} />
+            {fetchingKB ? 'Syncing...' : 'Fetch Knowledge Base'}
+          </button>
 
-            {/* Upload button */}
-            <label style={{
-              display: 'flex', alignItems: 'center', gap: '0.5rem',
-              background: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
-              padding: '0.75rem 1.25rem', borderRadius: '10px',
-              color: 'white', fontWeight: 500, cursor: 'pointer',
-              border: 'none', fontSize: '0.9rem',
-              boxShadow: '0 4px 14px rgba(99, 102, 241, 0.25)',
-              transition: 'all 0.2s ease'
-            }}>
-              <Icon name="add" size={18} />
-              Upload Private Document(s)
-              <input type="file" multiple accept=".pdf,.txt,.md,.doc,.docx" style={{ display: 'none' }} onChange={handleFileChange} disabled={loading} />
-            </label>
-          </div>
-          <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>Supported: PDF, DOCX, TXT, MD (Max 10 MB)</span>
+          {/* Upload Document pill */}
+          <label
+            className="zentra-btn zentra-btn-primary"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', cursor: loading ? 'not-allowed' : 'pointer' }}
+          >
+            <Icon name="upload" size={16} />
+            Upload Private Document(s)
+            <input
+              type="file"
+              multiple
+              accept=".pdf,.txt,.md,.doc,.docx"
+              style={{ display: 'none' }}
+              onChange={handleFileChange}
+              disabled={loading}
+            />
+          </label>
         </div>
       </div>
 
       {/* Admin KB Status Banner */}
       {adminKBStatus && (
-        <div style={{
-          background: 'rgba(59,130,246,0.05)', border: '1px solid rgba(59,130,246,0.2)',
-          borderRadius: '10px', padding: '1rem 1.5rem', marginBottom: '1.5rem',
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem'
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-            <span style={{ color: '#60a5fa' }}><Icon name="cloud_download" size={20} /></span>
+        <div
+          className="zentra-card"
+          style={{
+            padding: '1rem 1.5rem',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: '1rem',
+            background: 'var(--color-bg-secondary)',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+            <div
+              style={{
+                width: '38px',
+                height: '38px',
+                borderRadius: '10px',
+                background: 'rgba(59, 130, 246, 0.1)',
+                color: '#3b82f6',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+              }}
+            >
+              <Icon name="sync" size={20} />
+            </div>
             <div>
-              <span style={{ fontSize: '0.9rem', color: 'var(--color-text-primary)', fontWeight: 500 }}>
-                Admin Master KB: {adminKBStatus.adminDocCount} document{adminKBStatus.adminDocCount !== 1 ? 's' : ''}
-              </span>
-              <span style={{ marginLeft: '1rem', fontSize: '0.85rem', color: 'var(--color-text-secondary)' }}>
-                You have {syncedDocs.length} synced
-              </span>
+              <div style={{ fontSize: '0.9rem', fontWeight: 600, color: 'var(--color-text-primary)' }}>
+                Admin Master KB: {adminKBStatus.adminDocCount} available document{adminKBStatus.adminDocCount !== 1 ? 's' : ''}
+              </div>
+              <div style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)' }}>
+                You have {syncedDocs.length} synced locally into your interviewer context
+              </div>
             </div>
           </div>
+
           {adminKBStatus.latestAdminUpdate && (
-            <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>
-              Admin KB updated: {new Date(adminKBStatus.latestAdminUpdate).toLocaleString()}
+            <span style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)' }}>
+              Master KB updated: {new Date(adminKBStatus.latestAdminUpdate).toLocaleDateString()}
             </span>
           )}
         </div>
       )}
 
-      {error && <div style={{ background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', padding: '0.75rem 1rem', borderRadius: '8px', marginBottom: '1.5rem', border: '1px solid rgba(239, 68, 68, 0.2)' }}>{error}</div>}
-      {success && <div style={{ background: 'rgba(16, 185, 129, 0.1)', color: '#10b981', padding: '0.75rem 1rem', borderRadius: '8px', marginBottom: '1.5rem', border: '1px solid rgba(16, 185, 129, 0.2)' }}>{success}</div>}
+      {/* Error & Success Feedback */}
+      {error && (
+        <div className="zentra-card" style={{ padding: '0.9rem 1.25rem', borderColor: 'rgba(239, 68, 68, 0.25)', background: 'rgba(239, 68, 68, 0.05)', color: '#ef4444', display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.875rem' }}>
+          <Icon name="error" size={18} />
+          <span>{error}</span>
+        </div>
+      )}
+      {success && (
+        <div className="zentra-card" style={{ padding: '0.9rem 1.25rem', borderColor: 'rgba(16, 185, 129, 0.25)', background: 'rgba(16, 185, 129, 0.05)', color: '#10b981', display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.875rem' }}>
+          <Icon name="check_circle" size={18} />
+          <span>{success}</span>
+        </div>
+      )}
 
       {/* Stats Cards Section */}
-      <div className="kb-stats-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1rem', marginBottom: '2rem' }}>
-        {[
-          { label: 'Private Docs', value: privateDocs.length, sub: 'Your uploads', icon: 'lock', color: '#c084fc', bg: 'rgba(168, 85, 247, 0.1)' },
-          { label: 'Synced from Admin', value: syncedDocs.length, sub: 'Admin KB docs', icon: 'cloud_download', color: '#60a5fa', bg: 'rgba(59, 130, 246, 0.1)' },
-          { label: 'Chunks', value: totalChunks, sub: 'Total chunks', icon: 'memory', color: '#34d399', bg: 'rgba(16, 185, 129, 0.1)' },
-          { label: 'Storage', value: fmtSize(totalSize), sub: 'Private docs size', icon: 'description', color: '#fbbf24', bg: 'rgba(245, 158, 11, 0.1)' },
-          { label: 'Processed', value: processedDocs, sub: 'RAG-ready', icon: 'check_circle', color: '#818cf8', bg: 'rgba(99, 102, 241, 0.1)' },
-        ].map((stat, i) => (
-          <div key={i} style={{
-            background: 'var(--color-card-bg)', padding: '1.25rem', borderRadius: '12px',
-            border: '1px solid rgba(255,255,255,0.05)', display: 'flex', alignItems: 'center', gap: '1rem'
-          }}>
-            <div style={{ background: stat.bg, color: stat.color, padding: '0.85rem', borderRadius: '10px', display: 'flex' }}>
-              <Icon name={stat.icon} size={24} />
-            </div>
-            <div>
-              <div style={{ color: 'var(--color-text-secondary)', fontSize: '0.75rem', fontWeight: 500 }}>{stat.label}</div>
-              <div style={{ fontSize: '1.5rem', fontWeight: 600, marginTop: '0.25rem', color: 'var(--color-text-primary)' }}>{stat.value}</div>
-              <div style={{ color: 'var(--color-text-muted)', fontSize: '0.7rem' }}>{stat.sub}</div>
-            </div>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem' }}>
+        <div className="zentra-card zentra-metric-card">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span className="zentra-metric-label">Private Docs</span>
+            <span style={{ color: 'var(--color-text-muted)' }}><Icon name="lock" size={18} /></span>
           </div>
-        ))}
+          <div className="zentra-metric-value">{privateDocs.length}</div>
+          <span style={{ fontSize: '0.78rem', color: 'var(--color-text-muted)' }}>Your uploaded materials</span>
+        </div>
+
+        <div className="zentra-card zentra-metric-card">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span className="zentra-metric-label">Synced Admin</span>
+            <span style={{ color: '#3b82f6' }}><Icon name="cloud_download" size={18} /></span>
+          </div>
+          <div className="zentra-metric-value">{syncedDocs.length}</div>
+          <span style={{ fontSize: '0.78rem', color: 'var(--color-text-muted)' }}>From Admin Master KB</span>
+        </div>
+
+        <div className="zentra-card zentra-metric-card">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span className="zentra-metric-label">Total Chunks</span>
+            <span style={{ color: '#10b981' }}><Icon name="memory" size={18} /></span>
+          </div>
+          <div className="zentra-metric-value">{totalChunks}</div>
+          <span style={{ fontSize: '0.78rem', color: 'var(--color-text-muted)' }}>Vectorized for RAG</span>
+        </div>
+
+        <div className="zentra-card zentra-metric-card">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span className="zentra-metric-label">Storage Size</span>
+            <span style={{ color: '#f59e0b' }}><Icon name="description" size={18} /></span>
+          </div>
+          <div className="zentra-metric-value">{fmtSize(totalSize)}</div>
+          <span style={{ fontSize: '0.78rem', color: 'var(--color-text-muted)' }}>Private uploads volume</span>
+        </div>
+
+        <div className="zentra-card zentra-metric-card">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span className="zentra-metric-label">Processed</span>
+            <span style={{ color: '#10b981' }}><Icon name="check_circle" size={18} /></span>
+          </div>
+          <div className="zentra-metric-value">{processedDocs}</div>
+          <span style={{ fontSize: '0.78rem', color: 'var(--color-text-muted)' }}>RAG-ready documents</span>
+        </div>
       </div>
 
       {/* Table Section */}
-      <div style={{ background: 'var(--color-card-bg)', borderRadius: '12px', border: '1px solid rgba(255,255,255,0.05)', marginBottom: '2rem', overflow: 'hidden' }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', padding: '1.25rem 1.5rem', borderBottom: '1px solid rgba(255,255,255,0.05)' }}>
-          <h3 style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', margin: 0, fontSize: '1rem', fontWeight: 500, color: 'var(--color-text-primary)' }}>
-            <Icon name="description" size={18} style={{ color: 'var(--color-text-secondary)' }} /> Your Documents ({docs.length})
-          </h3>
-          <button onClick={fetchDocs} disabled={loading} style={{
-            display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'transparent',
-            border: '1px solid rgba(255,255,255,0.1)', color: 'var(--color-text-secondary)', cursor: 'pointer',
-            fontSize: '0.85rem', padding: '0.4rem 0.8rem', borderRadius: '6px'
-          }}>
-            <Icon name="refresh" size={14} /> Refresh
+      <div className="zentra-card" style={{ padding: 0, overflow: 'hidden' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1.25rem 1.75rem', borderBottom: '1px solid var(--color-border-subtle)' }}>
+          <div>
+            <h2 style={{ fontSize: '1.05rem', fontWeight: 600, margin: 0, color: 'var(--color-text-primary)' }}>
+              Knowledge Documents ({docs.length})
+            </h2>
+            <p style={{ margin: '0.2rem 0 0 0', fontSize: '0.8rem', color: 'var(--color-text-muted)' }}>
+              Documents available for dynamic question generation during live interviews
+            </p>
+          </div>
+
+          <button
+            onClick={fetchDocs}
+            disabled={loading}
+            className="zentra-btn zentra-btn-ghost"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.825rem' }}
+          >
+            <Icon name="refresh" size={15} /> Refresh
           </button>
         </div>
 
         <div style={{ overflowX: 'auto' }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left' }}>
-            <thead style={{ background: 'rgba(255,255,255,0.02)', color: 'var(--color-text-muted)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+          <table className="zentra-table">
+            <thead>
               <tr>
-                <th style={{ padding: '1rem 1.5rem', fontWeight: 600 }}>File Name</th>
-                <th style={{ padding: '1rem', fontWeight: 600 }}>Source</th>
-                <th style={{ padding: '1rem', fontWeight: 600 }}>Type</th>
-                <th style={{ padding: '1rem', fontWeight: 600 }}>Size</th>
-                <th style={{ padding: '1rem', fontWeight: 600 }}>Chunks</th>
-                <th style={{ padding: '1rem', fontWeight: 600 }}>Uploaded At</th>
-                <th style={{ padding: '1rem', fontWeight: 600 }}>Status</th>
-                <th style={{ padding: '1rem 1.5rem', fontWeight: 600, textAlign: 'right' }}>Actions</th>
+                <th style={{ width: '30%' }}>File Name</th>
+                <th>Source</th>
+                <th>Type</th>
+                <th>Size</th>
+                <th>Chunks</th>
+                <th>Uploaded</th>
+                <th>Status</th>
+                <th style={{ textAlign: 'right' }}>Actions</th>
               </tr>
             </thead>
             <tbody>
               {docs.length === 0 ? (
                 <tr>
-                  <td colSpan={8} style={{ padding: '3rem', textAlign: 'center', color: 'var(--color-text-muted)' }}>
-                    No documents yet. Upload private documents or click &ldquo;Fetch Knowledge Base&rdquo; to sync admin docs.
+                  <td colSpan={8} style={{ padding: '3.5rem 1.5rem', textAlign: 'center', color: 'var(--color-text-muted)' }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '0.75rem' }}>
+                      <div style={{ width: '48px', height: '48px', borderRadius: '50%', background: 'var(--color-bg-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--color-text-muted)' }}>
+                        <Icon name="description" size={24} />
+                      </div>
+                      <div style={{ fontWeight: 500, color: 'var(--color-text-primary)' }}>No documents in your knowledge base</div>
+                      <div style={{ fontSize: '0.85rem' }}>Upload private technical documents or click &ldquo;Fetch Knowledge Base&rdquo; to sync admin docs.</div>
+                    </div>
                   </td>
                 </tr>
               ) : (
                 docs.map((d) => (
-                  <tr key={d.id} style={{ borderTop: '1px solid rgba(255,255,255,0.03)', transition: 'background 0.2s', cursor: 'default' }}
-                    onMouseOver={e => e.currentTarget.style.background = 'rgba(255,255,255,0.02)'}
-                    onMouseOut={e => e.currentTarget.style.background = 'transparent'}>
-                    <td style={{ padding: '1rem 1.5rem', display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
-                      <div style={{ color: '#ef4444' }}>
-                        <Icon name="description" size={20} />
+                  <tr key={d.id}>
+                    <td>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                        <div style={{ width: '32px', height: '32px', borderRadius: '8px', background: 'rgba(99, 102, 241, 0.08)', color: '#6366f1', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                          <Icon name="description" size={17} />
+                        </div>
+                        <span style={{ fontWeight: 600, color: 'var(--color-text-primary)', fontSize: '0.875rem' }}>
+                          {d.originalFilename}
+                        </span>
                       </div>
-                      <span style={{ fontSize: '0.875rem', color: 'var(--color-text-primary)', fontWeight: 500 }}>{d.originalFilename}</span>
                     </td>
-                    <td style={{ padding: '1rem' }}>{sourceBadge(d.docSource)}</td>
-                    <td style={{ padding: '1rem', fontSize: '0.875rem', color: 'var(--color-text-secondary)' }}>{d.fileType.replace('.', '').toUpperCase()}</td>
-                    <td style={{ padding: '1rem', fontSize: '0.875rem', color: 'var(--color-text-secondary)' }}>{fmtSize(d.fileSize)}</td>
-                    <td style={{ padding: '1rem', fontSize: '0.875rem', color: 'var(--color-text-secondary)' }}>{d.chunkCount}</td>
-                    <td style={{ padding: '1rem', fontSize: '0.875rem', color: 'var(--color-text-secondary)' }}>{new Date(d.createdAt).toLocaleString()}</td>
-                    <td style={{ padding: '1rem' }}>{statusBadge(d.status)}</td>
-                    <td style={{ padding: '1rem 1.5rem', textAlign: 'right' }}>
-                      <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.5rem' }}>
-                        <button onClick={() => onDelete(d.id, d.docSource)} disabled={loading} style={{
-                          background: 'rgba(239, 68, 68, 0.1)', color: '#ef4444', border: 'none',
-                          padding: '0.4rem', borderRadius: '6px', cursor: 'pointer', display: 'flex'
-                        }} title={d.docSource === 'SYNCED_FROM_ADMIN' ? 'Remove from your KB' : 'Delete'}>
-                          <Icon name="delete" size={16} />
-                        </button>
-                      </div>
+                    <td>{sourceBadge(d.docSource)}</td>
+                    <td>
+                      <span className="zentra-badge zentra-badge-neutral" style={{ fontSize: '0.72rem' }}>
+                        {d.fileType.replace('.', '').toUpperCase()}
+                      </span>
+                    </td>
+                    <td style={{ color: 'var(--color-text-secondary)', fontSize: '0.85rem' }}>
+                      {fmtSize(d.fileSize)}
+                    </td>
+                    <td>
+                      <span style={{ fontWeight: 600, color: 'var(--color-text-primary)', fontSize: '0.85rem' }}>
+                        {d.chunkCount}
+                      </span>
+                    </td>
+                    <td style={{ color: 'var(--color-text-muted)', fontSize: '0.8rem' }}>
+                      {new Date(d.createdAt).toLocaleDateString()}
+                    </td>
+                    <td>{statusBadge(d.status)}</td>
+                    <td style={{ textAlign: 'right' }}>
+                      <button
+                        onClick={() => onDelete(d.id, d.docSource)}
+                        disabled={loading}
+                        className="zentra-btn zentra-btn-ghost"
+                        style={{ padding: '6px 10px', color: '#ef4444' }}
+                        title={d.docSource === 'SYNCED_FROM_ADMIN' ? 'Remove from your KB' : 'Delete document'}
+                      >
+                        <Icon name="delete" size={16} />
+                      </button>
                     </td>
                   </tr>
                 ))

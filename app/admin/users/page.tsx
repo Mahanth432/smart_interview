@@ -61,51 +61,40 @@ export default function AdminUsersPage() {
   }
 
   return (
-    <div style={{ maxWidth: '1200px', margin: '0 auto' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
+    <div className="zentra-page-container">
+      {/* Header */}
+      <div className="zentra-page-header">
         <div>
-          <h1 style={{ fontSize: '1.875rem', fontWeight: 700, margin: 0, color: 'var(--color-text-primary)' }}>User Management</h1>
-          <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem', marginTop: '0.25rem' }}>
-            Manage platform accounts, role authorization, and user details.
-          </p>
+          <div className="zentra-title-row">
+            <h1 className="zentra-page-title">Users</h1>
+            <span className="zentra-link-bubble" title="User Directory">
+              <Icon name="link" size={16} />
+            </span>
+          </div>
+          <p className="zentra-page-subtitle">Platform accounts, role authorizations, and activity metrics.</p>
         </div>
-        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-          <span style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)', padding: '0.4rem 0.8rem', backgroundColor: 'var(--color-card-bg)', border: '1px solid var(--color-card-border)', borderRadius: '8px' }}>
-            Total Users: <strong>{totalUsers}</strong>
-          </span>
+
+        <div className="zentra-header-actions">
+          <div className="zentra-date-pill">
+            <Icon name="people" size={16} style={{ color: 'var(--zentra-text-muted)' }} />
+            <span>Total Accounts: <strong>{totalUsers}</strong></span>
+          </div>
         </div>
       </div>
 
-      {/* Filters Bar */}
-      <div style={{
-        display: 'flex',
-        gap: '1rem',
-        marginBottom: '1.5rem',
-        flexWrap: 'wrap',
-        backgroundColor: 'var(--color-card-bg)',
-        border: '1px solid var(--color-card-border)',
-        padding: '1rem',
-        borderRadius: '12px'
-      }}>
-        <div style={{ flex: 1, minWidth: '220px', position: 'relative' }}>
+      {/* Toolbar Filter Card */}
+      <div className="zentra-card" style={{ padding: '1rem 1.25rem', marginBottom: '1.5rem', display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
+        <div style={{ flex: 1, minWidth: '240px', position: 'relative' }}>
           <input
             type="text"
-            placeholder="Search username..."
+            placeholder="Search by username..."
             value={search}
             onChange={handleSearchChange}
-            style={{
-              width: '100%',
-              padding: '0.6rem 1rem 0.6rem 2.5rem',
-              borderRadius: '8px',
-              border: '1px solid var(--color-card-border)',
-              backgroundColor: 'var(--color-bg-secondary)',
-              color: 'var(--color-text-primary)',
-              fontSize: '0.875rem',
-              outline: 'none',
-            }}
+            className="zentra-input"
+            style={{ paddingLeft: '2.5rem' }}
           />
-          <div style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--color-text-secondary)', pointerEvents: 'none' }}>
-            <Icon name="search" size={18} />
+          <div style={{ position: 'absolute', left: '0.9rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--zentra-text-muted)', pointerEvents: 'none' }}>
+            <Icon name="search" size={17} />
           </div>
         </div>
 
@@ -113,17 +102,7 @@ export default function AdminUsersPage() {
           <select
             value={role}
             onChange={handleRoleChange}
-            style={{
-              width: '100%',
-              padding: '0.6rem 1rem',
-              borderRadius: '8px',
-              border: '1px solid var(--color-card-border)',
-              backgroundColor: 'var(--color-bg-secondary)',
-              color: 'var(--color-text-primary)',
-              fontSize: '0.875rem',
-              outline: 'none',
-              cursor: 'pointer',
-            }}
+            className="zentra-select"
           >
             <option value="ALL">All Roles</option>
             <option value="ADMIN">ADMIN</option>
@@ -133,135 +112,118 @@ export default function AdminUsersPage() {
 
         <button
           onClick={fetchUsers}
-          style={{
-            padding: '0.6rem 1rem',
-            borderRadius: '8px',
-            border: '1px solid var(--color-card-border)',
-            backgroundColor: 'var(--color-bg-secondary)',
-            color: 'var(--color-text-primary)',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            fontSize: '0.875rem'
-          }}
+          className="zentra-btn zentra-btn-secondary"
+          title="Reload users"
         >
           <Icon name="refresh" size={16} />
-          Refresh
+          <span>Refresh</span>
         </button>
       </div>
 
-      {/* Users Table */}
-      <div style={{ backgroundColor: 'var(--color-card-bg)', border: '1px solid var(--color-card-border)', borderRadius: '12px', overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '600px' }}>
-          <thead>
-            <tr style={{ borderBottom: '1px solid var(--color-card-border)', backgroundColor: 'var(--color-bg-secondary)' }}>
-              <th style={{ padding: '1rem 1.25rem', fontWeight: 600, color: 'var(--color-text-secondary)', fontSize: '0.875rem' }}>ID</th>
-              <th style={{ padding: '1rem 1.25rem', fontWeight: 600, color: 'var(--color-text-secondary)', fontSize: '0.875rem' }}>Username</th>
-              <th style={{ padding: '1rem 1.25rem', fontWeight: 600, color: 'var(--color-text-secondary)', fontSize: '0.875rem' }}>Role</th>
-              <th style={{ padding: '1rem 1.25rem', fontWeight: 600, color: 'var(--color-text-secondary)', fontSize: '0.875rem' }}>Sessions</th>
-              <th style={{ padding: '1rem 1.25rem', fontWeight: 600, color: 'var(--color-text-secondary)', fontSize: '0.875rem' }}>Documents</th>
-              <th style={{ padding: '1rem 1.25rem', fontWeight: 600, color: 'var(--color-text-secondary)', fontSize: '0.875rem' }}>Joined Date</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
+      {/* Users Table Card */}
+      <div className="zentra-card" style={{ padding: 0, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table className="zentra-table">
+            <thead>
               <tr>
-                <td colSpan={6} style={{ padding: '3rem', textAlign: 'center', color: 'var(--color-text-secondary)' }}>
-                  Loading users...
-                </td>
+                <th style={{ width: '80px' }}>ID</th>
+                <th>User</th>
+                <th>Role</th>
+                <th>Sessions</th>
+                <th>Documents</th>
+                <th>Joined Date</th>
               </tr>
-            ) : users.length === 0 ? (
-              <tr>
-                <td colSpan={6} style={{ padding: '3rem', textAlign: 'center', color: 'var(--color-text-secondary)' }}>
-                  No users found matching criteria.
-                </td>
-              </tr>
-            ) : (
-              users.map((user) => (
-                <tr key={user.id} style={{ borderBottom: '1px solid var(--color-card-border)' }}>
-                  <td style={{ padding: '1rem 1.25rem', color: 'var(--color-text-secondary)', fontSize: '0.875rem' }}>#{user.id}</td>
-                  <td style={{ padding: '1rem 1.25rem', color: 'var(--color-text-primary)', fontWeight: 500 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <div style={{
-                        width: '32px',
-                        height: '32px',
-                        borderRadius: '50%',
-                        backgroundColor: 'var(--color-bg-tertiary)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        fontSize: '0.875rem',
-                        fontWeight: 600,
-                        color: 'var(--color-text-primary)'
-                      }}>
-                        {user.username.charAt(0).toUpperCase()}
-                      </div>
-                      <span>{user.username}</span>
-                    </div>
-                  </td>
-                  <td style={{ padding: '1rem 1.25rem' }}>
-                    <span style={{
-                      padding: '0.25rem 0.75rem',
-                      borderRadius: '9999px',
-                      fontSize: '0.75rem',
-                      fontWeight: 600,
-                      backgroundColor: user.role === 'ADMIN' ? 'rgba(239,68,68,0.15)' : 'rgba(99,102,241,0.15)',
-                      color: user.role === 'ADMIN' ? '#ef4444' : '#6366f1',
-                      border: user.role === 'ADMIN' ? '1px solid rgba(239,68,68,0.3)' : '1px solid rgba(99,102,241,0.3)',
-                    }}>
-                      {user.role}
-                    </span>
-                  </td>
-                  <td style={{ padding: '1rem 1.25rem', color: 'var(--color-text-primary)', fontSize: '0.875rem' }}>
-                    {user._count.sessions}
-                  </td>
-                  <td style={{ padding: '1rem 1.25rem', color: 'var(--color-text-primary)', fontSize: '0.875rem' }}>
-                    {user._count.documents}
-                  </td>
-                  <td style={{ padding: '1rem 1.25rem', color: 'var(--color-text-secondary)', fontSize: '0.875rem' }}>
-                    {new Date(user.createdAt).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr>
+                  <td colSpan={6} style={{ padding: '3.5rem', textAlign: 'center', color: 'var(--zentra-text-muted)' }}>
+                    Loading platform users...
                   </td>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+              ) : users.length === 0 ? (
+                <tr>
+                  <td colSpan={6} style={{ padding: '3.5rem', textAlign: 'center', color: 'var(--zentra-text-muted)' }}>
+                    No users match your search criteria.
+                  </td>
+                </tr>
+              ) : (
+                users.map((user) => {
+                  const isAdmin = user.role === 'ADMIN'
+                  return (
+                    <tr key={user.id}>
+                      <td style={{ color: 'var(--zentra-text-muted)', fontSize: '0.8rem', fontWeight: 600 }}>
+                        #{user.id}
+                      </td>
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                          <div style={{
+                            width: '34px',
+                            height: '34px',
+                            borderRadius: '50%',
+                            background: isAdmin ? 'linear-gradient(135deg, #ef4444, #f97316)' : 'linear-gradient(135deg, #4f46e5, #3b82f6)',
+                            color: '#ffffff',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontSize: '0.85rem',
+                            fontWeight: 700,
+                          }}>
+                            {user.username.charAt(0).toUpperCase()}
+                          </div>
+                          <div>
+                            <span style={{ fontWeight: 600, color: 'var(--zentra-text-primary)' }}>{user.username}</span>
+                          </div>
+                        </div>
+                      </td>
+                      <td>
+                        <span className={`zentra-badge ${isAdmin ? 'danger' : 'info'}`}>
+                          {user.role}
+                        </span>
+                      </td>
+                      <td>
+                        <span className="zentra-pill-tag">
+                          {user._count.sessions} sessions
+                        </span>
+                      </td>
+                      <td>
+                        <span className="zentra-pill-tag">
+                          {user._count.documents} docs
+                        </span>
+                      </td>
+                      <td>
+                        <span style={{ color: 'var(--zentra-text-muted)', fontSize: '0.825rem' }}>
+                          {new Date(user.createdAt).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })}
+                        </span>
+                      </td>
+                    </tr>
+                  )
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
 
         {/* Pagination Footer */}
         {totalPages > 1 && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem 1.25rem', borderTop: '1px solid var(--color-card-border)' }}>
-            <span style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem 1.5rem', borderTop: '1px solid var(--zentra-border)' }}>
+            <span style={{ fontSize: '0.825rem', color: 'var(--zentra-text-muted)' }}>
               Page {page} of {totalPages}
             </span>
             <div style={{ display: 'flex', gap: '0.5rem' }}>
               <button
                 disabled={page <= 1}
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
-                style={{
-                  padding: '0.4rem 0.8rem',
-                  borderRadius: '6px',
-                  border: '1px solid var(--color-card-border)',
-                  backgroundColor: 'var(--color-bg-secondary)',
-                  color: page <= 1 ? 'var(--color-text-muted)' : 'var(--color-text-primary)',
-                  cursor: page <= 1 ? 'not-allowed' : 'pointer',
-                  fontSize: '0.875rem'
-                }}
+                className="zentra-btn zentra-btn-secondary"
+                style={{ padding: '0.35rem 0.85rem', fontSize: '0.8rem' }}
               >
                 Previous
               </button>
               <button
                 disabled={page >= totalPages}
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                style={{
-                  padding: '0.4rem 0.8rem',
-                  borderRadius: '6px',
-                  border: '1px solid var(--color-card-border)',
-                  backgroundColor: 'var(--color-bg-secondary)',
-                  color: page >= totalPages ? 'var(--color-text-muted)' : 'var(--color-text-primary)',
-                  cursor: page >= totalPages ? 'not-allowed' : 'pointer',
-                  fontSize: '0.875rem'
-                }}
+                className="zentra-btn zentra-btn-secondary"
+                style={{ padding: '0.35rem 0.85rem', fontSize: '0.8rem' }}
               >
                 Next
               </button>

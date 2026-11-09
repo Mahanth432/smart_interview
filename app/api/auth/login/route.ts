@@ -3,14 +3,12 @@ import bcrypt from 'bcryptjs'
 import prisma from '@/lib/db'
 import { getAppSession, getServerInstanceId } from '@/lib/auth'
 import { createAuditLog } from '@/lib/audit-log'
-import { generateSecureOtp, hashOtp } from '@/lib/otp'
-import { sendOtpEmail } from '@/lib/mail'
 
 export async function POST(request: Request) {
   try {
     if (!process.env.DATABASE_URL) {
       console.error('Missing DATABASE_URL environment variable')
-      return NextResponse.json({ error: 'Server misconfiguration: DATABASE_URL is not set' }, { status: 500 })
+      return NextResponse.json({ error: 'Server misconfiguration' }, { status: 500 })
     }
 
     const { username, password } = await request.json()
@@ -22,91 +20,40 @@ export async function POST(request: Request) {
       )
     }
 
-    const normalizedInput = username.trim().toLowerCase()
+    const trimmedInput = username.trim()
+    const normalizedInput = trimmedInput.toLowerCase()
 
-    // --- ADMIN FLOW: unchanged ---
-    // Try to find an exact username match first (admin uses username, not email)
-    const userByUsername = await prisma.user.findUnique({
-      where: { username: username.trim() },
-    })
-
-    if (userByUsername && userByUsername.role === 'ADMIN') {
-      // Admin: validate password and create session immediately
-      if (!userByUsername.passwordHash) {
-        return NextResponse.json(
-          { error: 'Password login is not enabled for this account.' },
-          { status: 403 }
-        )
-      }
-
-      const isPasswordValid = await bcrypt.compare(password, userByUsername.passwordHash)
-      if (!isPasswordValid) {
-        createAuditLog({
-          userId: userByUsername.id,
-          username: userByUsername.username,
-          action: 'AUTH_LOGIN_FAILURE',
-          status: 'FAILURE',
-          metadata: { reason: 'Incorrect password', role: 'ADMIN' },
-        })
-        return NextResponse.json(
-          { error: 'Invalid username or password' },
-          { status: 401 }
-        )
-      }
-
-      const response = NextResponse.json({ success: true, redirect: '/admin' })
-      const session = await getAppSession(request, response)
-      session.userId = userByUsername.id
-      session.username = userByUsername.username
-      session.role = userByUsername.role
-      session.instanceId = getServerInstanceId()
-      session.isLoggedIn = true
-      await session.save()
-
-      createAuditLog({
-        userId: userByUsername.id,
-        username: userByUsername.username,
-        action: 'ADMIN_LOGIN_SUCCESS',
-        status: 'SUCCESS',
-        metadata: { role: 'ADMIN' },
-      })
-      return response
-    }
-
-    // --- CANDIDATE / INTERVIEWER FLOW: password verify → send OTP (no session yet) ---
-    // Look up by username OR email
+    // Look up user by username OR email (case-insensitive for email)
     const user = await prisma.user.findFirst({
       where: {
         OR: [
-          { username: username.trim() },
-          { email: normalizedInput },
+          { username: trimmedInput },
           { username: normalizedInput },
-          { candidate: { email: normalizedInput } },
+          { email: normalizedInput },
         ],
-        role: { in: ['CANDIDATE', 'INTERVIEWER'] },
       },
     })
 
+    // Generic error for non-existent user to prevent account enumeration
     if (!user) {
       createAuditLog({
-        username: username.trim(),
+        username: trimmedInput,
         action: 'AUTH_LOGIN_FAILURE',
         status: 'FAILURE',
-        metadata: { reason: 'User not found', input: normalizedInput },
+        metadata: { reason: 'User not found' },
       })
       return NextResponse.json(
-        { error: 'Invalid username/email or password' },
+        { error: 'Invalid credentials' },
         { status: 401 }
       )
     }
 
-    // Account exists but has no password set (previously passwordless)
+    // Legacy account without password
     if (!user.passwordHash) {
       return NextResponse.json(
         {
           requiresPasswordSetup: true,
           email: user.email || user.username,
-          role: user.role,
           message: 'Your account requires a password to be set before signing in.',
         },
         { status: 403 }
@@ -124,60 +71,53 @@ export async function POST(request: Request) {
         metadata: { reason: 'Incorrect password', role: user.role },
       })
       return NextResponse.json(
-        { error: 'Invalid username/email or password' },
+        { error: 'Invalid credentials' },
         { status: 401 }
       )
     }
 
-    // Password correct — generate and send OTP; do NOT create session yet
-    const emailToUse = user.email || user.username
-    const normalizedEmail = emailToUse.trim().toLowerCase()
-
-    // Invalidate any previous unused OTPs for this email
-    await prisma.otpVerification.updateMany({
-      where: { email: normalizedEmail, usedAt: null },
-      data: { usedAt: new Date() },
-    })
-
-    const otp = generateSecureOtp()
-    const otpHash = hashOtp(otp)
-
-    await prisma.otpVerification.create({
-      data: {
+    // For non-admin accounts, require email verification
+    if (user.role !== 'ADMIN' && !user.emailVerified) {
+      createAuditLog({
         userId: user.id,
-        email: normalizedEmail,
-        otpHash,
-        expiresAt: new Date(Date.now() + 5 * 60 * 1000),
-        attempts: 0,
-      },
-    })
-
-    try {
-      await sendOtpEmail({
-        email: normalizedEmail,
-        otp,
-        role: user.role as 'CANDIDATE' | 'INTERVIEWER',
+        username: user.username,
+        action: 'AUTH_LOGIN_FAILURE',
+        status: 'FAILURE',
+        metadata: { reason: 'Email not verified', role: user.role },
       })
-    } catch (mailErr) {
-      console.error('[login] Failed to send OTP email:', mailErr)
+      return NextResponse.json(
+        { error: 'Your email address has not been verified. Please complete registration or contact support.' },
+        { status: 403 }
+      )
     }
 
-    const auditAction =
-      user.role === 'CANDIDATE' ? 'CANDIDATE_PASSWORD_VERIFIED' : 'INTERVIEWER_PASSWORD_VERIFIED'
+    // Determine redirect based on database role
+    const redirectMap: Record<string, string> = {
+      ADMIN: '/admin',
+      INTERVIEWER: '/dashboard',
+      CANDIDATE: '/candidate',
+    }
+    const redirect = redirectMap[user.role] || '/dashboard'
+
+    // Create authenticated session
+    const response = NextResponse.json({ success: true, redirect })
+    const session = await getAppSession(request, response)
+    session.userId = user.id
+    session.username = user.username
+    session.role = user.role
+    session.instanceId = getServerInstanceId()
+    session.isLoggedIn = true
+    await session.save()
+
     createAuditLog({
       userId: user.id,
       username: user.username,
-      action: auditAction,
+      action: 'AUTH_LOGIN_SUCCESS',
       status: 'SUCCESS',
-      metadata: { role: user.role, email: normalizedEmail },
+      metadata: { role: user.role },
     })
 
-    return NextResponse.json({
-      otpRequired: true,
-      email: normalizedEmail,
-      role: user.role,
-      message: 'Password verified. A 6-digit code has been sent to your email.',
-    })
+    return response
   } catch (error) {
     console.error('Login error:', error)
     return NextResponse.json(

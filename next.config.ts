@@ -10,7 +10,7 @@ const nextConfig: NextConfig = {
       },
     ],
   },
-  serverExternalPackages: ['pdf-parse', 'pdfjs-dist'],
+  serverExternalPackages: ['pdf-parse', 'pdfjs-dist', '@xenova/transformers', 'bcryptjs'],
 }
 
 export default nextConfig

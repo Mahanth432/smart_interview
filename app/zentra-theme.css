@@ -1,0 +1,740 @@
+/* ==========================================================================
+   ZENTRA DESIGN SYSTEM — SMARTINTERVIEW UNIFIED THEME
+   Inspired by Zentra Financial Analytics Dashboard:
+   - Clean, bright, predominantly white/light-gray interface
+   - Rounded cards with subtle borders and soft shadows
+   - Pill-shaped buttons, navigation tabs, and status badges
+   - Generous whitespace, elegant typography, modern sans-serif
+   - Consistent light mode as primary, seamless dark mode support
+   ========================================================================== */
+
+:root {
+  /* Zentra Core Surfaces */
+  --zentra-bg-canvas: #f4f5f8;
+  --zentra-bg-surface: #ffffff;
+  --zentra-bg-subtle: #f8f9fc;
+  --zentra-bg-muted: #f1f3f7;
+  --zentra-bg-hover: #eef1f6;
+
+  /* Zentra Borders & Dividers */
+  --zentra-border: #e8ebf0;
+  --zentra-border-subtle: #edf0f5;
+  --zentra-border-hover: #cbd5e1;
+
+  /* Zentra Typography */
+  --zentra-text-primary: #0f172a;
+  --zentra-text-secondary: #475569;
+  --zentra-text-muted: #64748b;
+  --zentra-text-dim: #94a3b8;
+
+  /* Zentra Accents */
+  --zentra-accent-blue: #2563eb;
+  --zentra-accent-indigo: #4f46e5;
+  --zentra-accent-cyan: #0284c7;
+  --zentra-accent-emerald: #10b981;
+  --zentra-accent-amber: #f59e0b;
+  --zentra-accent-rose: #ef4444;
+  --zentra-accent-purple: #8b5cf6;
+  --zentra-accent-orange: #f97316;
+
+  /* Zentra Pill Navigation */
+  --zentra-pill-active-bg: #18191c;
+  --zentra-pill-active-text: #ffffff;
+  --zentra-pill-inactive-text: #475569;
+  --zentra-pill-hover-bg: #f1f3f7;
+
+  /* Shadows */
+  --zentra-shadow-card: 0 4px 20px -2px rgba(15, 23, 42, 0.04), 0 2px 6px -1px rgba(15, 23, 42, 0.02);
+  --zentra-shadow-card-hover: 0 16px 36px -6px rgba(15, 23, 42, 0.08), 0 6px 14px -2px rgba(15, 23, 42, 0.03);
+  --zentra-shadow-pill: 0 2px 8px -2px rgba(15, 23, 42, 0.08);
+  --zentra-shadow-dropdown: 0 12px 32px -4px rgba(15, 23, 42, 0.12);
+
+  /* Radii */
+  --zentra-radius-card: 22px;
+  --zentra-radius-pill: 9999px;
+  --zentra-radius-input: 12px;
+  --zentra-radius-sm: 8px;
+
+  /* Re-assign existing app CSS variables to Zentra light tokens */
+  --color-bg-primary: var(--zentra-bg-canvas);
+  --color-bg-secondary: var(--zentra-bg-surface);
+  --color-bg-tertiary: var(--zentra-bg-muted);
+  --color-card-bg: var(--zentra-bg-surface);
+  --color-card-border: var(--zentra-border);
+  --color-card-hover-border: var(--zentra-border-hover);
+  --color-border: var(--zentra-border);
+  --color-border-subtle: var(--zentra-border-subtle);
+  --color-text-primary: var(--zentra-text-primary);
+  --color-text-secondary: var(--zentra-text-secondary);
+  --color-text-muted: var(--zentra-text-muted);
+}
+
+/* Explicit Dark Theme */
+html.dark-theme, body.dark-theme {
+  --zentra-bg-canvas: #090d16;
+  --zentra-bg-surface: #111625;
+  --zentra-bg-subtle: #141b2e;
+  --zentra-bg-muted: #1a2238;
+  --zentra-bg-hover: #1e2842;
+
+  --zentra-border: rgba(255, 255, 255, 0.08);
+  --zentra-border-subtle: rgba(255, 255, 255, 0.05);
+  --zentra-border-hover: rgba(255, 255, 255, 0.2);
+
+  --zentra-text-primary: #f8fafc;
+  --zentra-text-secondary: #94a3b8;
+  --zentra-text-muted: #64748b;
+  --zentra-text-dim: #475569;
+
+  --zentra-pill-active-bg: #ffffff;
+  --zentra-pill-active-text: #0f172a;
+  --zentra-pill-inactive-text: #94a3b8;
+  --zentra-pill-hover-bg: rgba(255, 255, 255, 0.08);
+
+  --zentra-shadow-card: 0 4px 20px -2px rgba(0, 0, 0, 0.4);
+  --zentra-shadow-card-hover: 0 16px 36px -4px rgba(0, 0, 0, 0.55);
+  --zentra-shadow-pill: 0 2px 8px -2px rgba(0, 0, 0, 0.4);
+
+  /* Re-map global app variables to dark Zentra tokens */
+  --color-bg-primary: var(--zentra-bg-canvas);
+  --color-bg-secondary: var(--zentra-bg-surface);
+  --color-bg-tertiary: var(--zentra-bg-muted);
+  --color-card-bg: var(--zentra-bg-surface);
+  --color-card-border: var(--zentra-border);
+  --color-card-hover-border: var(--zentra-border-hover);
+  --color-border: var(--zentra-border);
+  --color-border-subtle: var(--zentra-border-subtle);
+  --color-text-primary: var(--zentra-text-primary);
+  --color-text-secondary: var(--zentra-text-secondary);
+  --color-text-muted: var(--zentra-text-muted);
+}
+
+/* ==========================================================================
+   PAGE CANVAS & GLOBAL OVERRIDES
+   ========================================================================== */
+
+body {
+  background-color: var(--zentra-bg-canvas) !important;
+  color: var(--zentra-text-primary) !important;
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Zentra Container Wrapper */
+.zentra-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--zentra-bg-canvas);
+}
+
+.zentra-page-container {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 1.75rem 2rem 3rem 2rem;
+  width: 100%;
+}
+
+@media (max-width: 768px) {
+  .zentra-page-container {
+    padding: 1rem 1rem 2rem 1rem;
+  }
+}
+
+/* ==========================================================================
+   PAGE HEADERS (Zentra "Overview 🔗" Style)
+   ========================================================================== */
+
+.zentra-page-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 1.25rem;
+  margin-bottom: 2rem;
+}
+
+.zentra-title-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.zentra-page-title {
+  font-size: 2.25rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--zentra-text-primary);
+  margin: 0;
+  line-height: 1.15;
+}
+
+.zentra-link-bubble {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: var(--zentra-bg-surface);
+  border: 1px solid var(--zentra-border);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--zentra-text-muted);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.zentra-link-bubble:hover {
+  color: var(--zentra-text-primary);
+  border-color: var(--zentra-border-hover);
+}
+
+.zentra-page-subtitle {
+  color: var(--zentra-text-secondary);
+  font-size: 0.95rem;
+  margin-top: 0.4rem;
+  line-height: 1.5;
+}
+
+.zentra-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+/* ==========================================================================
+   DATE FILTER & COMPARISON PILL (As in Zentra Screenshot)
+   ========================================================================== */
+
+.zentra-date-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: var(--zentra-bg-surface);
+  border: 1px solid var(--zentra-border);
+  border-radius: var(--zentra-radius-pill);
+  padding: 0.5rem 1.1rem;
+  font-size: 0.825rem;
+  font-weight: 500;
+  color: var(--zentra-text-primary);
+  box-shadow: 0 1px 3px rgba(15,23,42,0.03);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.zentra-date-pill:hover {
+  border-color: var(--zentra-border-hover);
+}
+
+.zentra-compare-label {
+  color: var(--zentra-text-muted);
+  font-size: 0.8rem;
+  font-weight: 400;
+  padding: 0 0.25rem;
+}
+
+/* ==========================================================================
+   ZENTRA CARDS & CONTAINERS
+   ========================================================================== */
+
+.zentra-card {
+  background: var(--zentra-bg-surface);
+  border: 1px solid var(--zentra-border);
+  border-radius: var(--zentra-radius-card);
+  box-shadow: var(--zentra-shadow-card);
+  padding: 1.75rem;
+  position: relative;
+  transition: box-shadow 0.2s ease, border-color 0.2s ease;
+}
+
+.zentra-card:hover {
+  box-shadow: var(--zentra-shadow-card-hover);
+  border-color: var(--zentra-border-hover);
+}
+
+.zentra-card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+
+.zentra-card-title {
+  font-size: 1.15rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--zentra-text-primary);
+  margin: 0;
+}
+
+.zentra-dot-menu {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--zentra-bg-subtle);
+  border: 1px solid var(--zentra-border-subtle);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--zentra-text-muted);
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.zentra-dot-menu:hover {
+  background: var(--zentra-bg-hover);
+  color: var(--zentra-text-primary);
+}
+
+/* Override existing glass-card to look like Zentra cards */
+.glass-card {
+  background: var(--zentra-bg-surface) !important;
+  border: 1px solid var(--zentra-border) !important;
+  border-radius: var(--zentra-radius-card) !important;
+  box-shadow: var(--zentra-shadow-card) !important;
+  backdrop-filter: none !important;
+}
+
+/* ==========================================================================
+   METRIC DISPLAYS (Zentra 106k, $41,5... style)
+   ========================================================================== */
+
+.zentra-metric-num {
+  font-size: 2.5rem;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+  color: var(--zentra-text-primary);
+  line-height: 1.1;
+}
+
+.zentra-metric-label {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--zentra-text-secondary);
+  margin-bottom: 0.4rem;
+}
+
+.zentra-metric-sub {
+  font-size: 0.8rem;
+  color: var(--zentra-text-muted);
+  margin-top: 0.35rem;
+}
+
+/* Micro badges for metrics */
+.zentra-pill-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.2rem 0.65rem;
+  border-radius: var(--zentra-radius-pill);
+  font-size: 0.725rem;
+  font-weight: 600;
+  background: var(--zentra-bg-muted);
+  color: var(--zentra-text-secondary);
+  border: 1px solid var(--zentra-border-subtle);
+}
+
+.zentra-pill-tag.green {
+  background: rgba(16, 185, 129, 0.1);
+  color: #059669;
+  border-color: rgba(16, 185, 129, 0.2);
+}
+
+.zentra-pill-tag.blue {
+  background: rgba(37, 99, 235, 0.1);
+  color: #2563eb;
+  border-color: rgba(37, 99, 235, 0.2);
+}
+
+/* ==========================================================================
+   STRIPED PROGRESS BARS (As shown in Gross Volume card in screenshot)
+   ========================================================================== */
+
+.striped-progress-bar {
+  height: 10px;
+  border-radius: var(--zentra-radius-pill);
+  width: 100%;
+  position: relative;
+  overflow: hidden;
+}
+
+.striped-bar-green {
+  background: #10b981;
+  background-image: repeating-linear-gradient(45deg, rgba(255,255,255,0.25) 0, rgba(255,255,255,0.25) 4px, transparent 4px, transparent 8px);
+}
+
+.striped-bar-blue {
+  background: #3b82f6;
+  background-image: repeating-linear-gradient(45deg, rgba(255,255,255,0.25) 0, rgba(255,255,255,0.25) 4px, transparent 4px, transparent 8px);
+}
+
+.striped-bar-rose {
+  background: #f43f5e;
+  background-image: repeating-linear-gradient(45deg, rgba(255,255,255,0.25) 0, rgba(255,255,255,0.25) 4px, transparent 4px, transparent 8px);
+}
+
+.striped-bar-purple {
+  background: #8b5cf6;
+  background-image: repeating-linear-gradient(45deg, rgba(255,255,255,0.25) 0, rgba(255,255,255,0.25) 4px, transparent 4px, transparent 8px);
+}
+
+/* ==========================================================================
+   INTERACTIVE PROMPT EXPLORATION BAR (As in Zentra Screenshot)
+   ========================================================================== */
+
+.zentra-prompt-bar {
+  margin-top: 1.5rem;
+  background: linear-gradient(180deg, rgba(239, 246, 255, 0.7) 0%, rgba(248, 250, 252, 0.95) 100%);
+  border: 1px solid rgba(191, 219, 254, 0.7);
+  border-radius: 16px;
+  padding: 1rem 1.25rem;
+  box-shadow: 0 2px 10px -2px rgba(37, 99, 235, 0.05);
+}
+
+html.dark-theme .zentra-prompt-bar, body.dark-theme .zentra-prompt-bar {
+  background: linear-gradient(180deg, rgba(30, 41, 59, 0.6) 0%, rgba(15, 23, 42, 0.8) 100%);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.zentra-prompt-title {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.825rem;
+  font-weight: 600;
+  color: #1e40af;
+  margin-bottom: 0.5rem;
+}
+
+html.dark-theme .zentra-prompt-title, body.dark-theme .zentra-prompt-title {
+  color: #93c5fd;
+}
+
+.zentra-prompt-input-box {
+  background: var(--zentra-bg-surface);
+  border: 1px solid var(--zentra-border);
+  border-radius: var(--zentra-radius-pill);
+  padding: 0.5rem 1rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--zentra-text-secondary);
+}
+
+/* ==========================================================================
+   BUTTONS & CONTROLS
+   ========================================================================== */
+
+.zentra-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1.35rem;
+  border-radius: var(--zentra-radius-pill);
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  text-decoration: none;
+  white-space: nowrap;
+  line-height: 1.2;
+}
+
+.zentra-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* Primary Dark Pill Button */
+.zentra-btn-primary {
+  background: var(--zentra-pill-active-bg);
+  color: var(--zentra-pill-active-text);
+  border: 1px solid transparent;
+  box-shadow: var(--zentra-shadow-pill);
+}
+
+.zentra-btn-primary:hover:not(:disabled) {
+  opacity: 0.9;
+  transform: translateY(-1px);
+}
+
+/* Blue Accent Button */
+.zentra-btn-accent {
+  background: var(--zentra-accent-blue);
+  color: #ffffff;
+  border: 1px solid transparent;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.25);
+}
+
+.zentra-btn-accent:hover:not(:disabled) {
+  background: #1d4ed8;
+  transform: translateY(-1px);
+}
+
+/* Secondary Subtle Pill Button */
+.zentra-btn-secondary {
+  background: var(--zentra-bg-surface);
+  color: var(--zentra-text-primary);
+  border: 1px solid var(--zentra-border);
+}
+
+.zentra-btn-secondary:hover:not(:disabled) {
+  background: var(--zentra-bg-muted);
+  border-color: var(--zentra-border-hover);
+}
+
+/* Danger Pill Button */
+.zentra-btn-danger {
+  background: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+.zentra-btn-danger:hover:not(:disabled) {
+  background: #ef4444;
+  color: #ffffff;
+}
+
+/* ==========================================================================
+   STATUS BADGES
+   ========================================================================== */
+
+.zentra-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.85rem;
+  border-radius: var(--zentra-radius-pill);
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+}
+
+.zentra-badge.success {
+  background: rgba(16, 185, 129, 0.12);
+  color: #059669;
+  border: 1px solid rgba(16, 185, 129, 0.25);
+}
+
+.zentra-badge.warning {
+  background: rgba(245, 158, 11, 0.12);
+  color: #d97706;
+  border: 1px solid rgba(245, 158, 11, 0.25);
+}
+
+.zentra-badge.info {
+  background: rgba(37, 99, 235, 0.1);
+  color: #2563eb;
+  border: 1px solid rgba(37, 99, 235, 0.2);
+}
+
+.zentra-badge.neutral {
+  background: var(--zentra-bg-muted);
+  color: var(--zentra-text-secondary);
+  border: 1px solid var(--zentra-border);
+}
+
+.zentra-badge.danger {
+  background: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+/* ==========================================================================
+   DATA TABLES
+   ========================================================================== */
+
+.zentra-table-wrap {
+  background: var(--zentra-bg-surface);
+  border: 1px solid var(--zentra-border);
+  border-radius: var(--zentra-radius-card);
+  box-shadow: var(--zentra-shadow-card);
+  overflow: hidden;
+}
+
+.zentra-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.zentra-table th {
+  padding: 1rem 1.25rem;
+  background: var(--zentra-bg-subtle);
+  border-bottom: 1px solid var(--zentra-border);
+  color: var(--zentra-text-muted);
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.zentra-table td {
+  padding: 1.15rem 1.25rem;
+  border-bottom: 1px solid var(--zentra-border-subtle);
+  color: var(--zentra-text-primary);
+  font-size: 0.875rem;
+  vertical-align: middle;
+}
+
+.zentra-table tbody tr {
+  transition: background-color 0.15s ease;
+}
+
+.zentra-table tbody tr:hover {
+  background-color: var(--zentra-bg-subtle);
+}
+
+.zentra-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
+/* ==========================================================================
+   INPUTS & FORM CONTROLS
+   ========================================================================== */
+
+.zentra-input {
+  width: 100%;
+  background: var(--zentra-bg-surface);
+  border: 1px solid var(--zentra-border);
+  border-radius: var(--zentra-radius-input);
+  padding: 0.65rem 1rem;
+  font-size: 0.9rem;
+  color: var(--zentra-text-primary);
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+}
+
+.zentra-input:focus {
+  border-color: var(--zentra-accent-blue);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.zentra-select {
+  width: 100%;
+  background: var(--zentra-bg-surface);
+  border: 1px solid var(--zentra-border);
+  border-radius: var(--zentra-radius-input);
+  padding: 0.65rem 1rem;
+  font-size: 0.9rem;
+  color: var(--zentra-text-primary);
+  outline: none;
+  cursor: pointer;
+}
+
+.zentra-select:focus {
+  border-color: var(--zentra-accent-blue);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+/* ==========================================================================
+   HEADER & SIDEBAR RESTYLING TO MATCH ZENTRA
+   ========================================================================== */
+
+.app-header {
+  background: var(--zentra-bg-surface) !important;
+  border-bottom: 1px solid var(--zentra-border) !important;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.03) !important;
+  backdrop-filter: none !important;
+}
+
+.sidebar {
+  background: var(--zentra-bg-surface) !important;
+  border-right: 1px solid var(--zentra-border) !important;
+}
+
+.app-footer {
+  background: var(--zentra-bg-surface) !important;
+  border-top: 1px solid var(--zentra-border) !important;
+  color: var(--zentra-text-muted) !important;
+}
+
+/* ==========================================================================
+   AUTH CARD & FORM REFINEMENTS
+   ========================================================================== */
+
+.auth-page-bg {
+  background-color: var(--zentra-bg-canvas) !important;
+}
+
+.auth-card {
+  background: var(--zentra-bg-surface) !important;
+  border: 1px solid var(--zentra-border) !important;
+  border-radius: var(--zentra-radius-card) !important;
+  box-shadow: var(--zentra-shadow-card) !important;
+}
+
+.auth-input, .auth-form-control {
+  background: var(--zentra-bg-surface) !important;
+  border: 1px solid var(--zentra-border) !important;
+  border-radius: var(--zentra-radius-input) !important;
+  color: var(--zentra-text-primary) !important;
+  font-size: 0.9rem !important;
+  padding: 0.75rem 1rem !important;
+  transition: all 0.2s ease !important;
+}
+
+.auth-input:focus, .auth-form-control:focus {
+  border-color: var(--zentra-accent-blue) !important;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12) !important;
+  outline: none !important;
+}
+
+.auth-btn-primary {
+  border-radius: var(--zentra-radius-pill) !important;
+  padding: 0.75rem 1.5rem !important;
+  font-weight: 600 !important;
+}
+
+/* Switch styling for Zentra theme */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 46px;
+  height: 26px;
+  flex-shrink: 0;
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider.round {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--zentra-border);
+  transition: 0.25s ease;
+  border-radius: 34px;
+}
+
+.slider.round:before {
+  position: absolute;
+  content: "";
+  height: 20px;
+  width: 20px;
+  left: 3px;
+  bottom: 3px;
+  background-color: white;
+  transition: 0.25s ease;
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+input:checked + .slider.round {
+  background-color: var(--zentra-accent-blue);
+}
+
+input:checked + .slider.round:before {
+  transform: translateX(20px);
+}
+

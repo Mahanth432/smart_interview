@@ -19,6 +19,9 @@ export async function POST(request: Request) {
     if (!session?.isLoggedIn || !session.userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+    if (session.role === 'CANDIDATE') {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
 
     const body = await request.json()
     const query = typeof body.query === 'string' ? body.query.trim() : ''

@@ -12,6 +12,9 @@ const ALLOWED_KEYS = [
   'rag.chunk_overlap',
   'auth.session_timeout_hours',
   'llm.default_provider',
+  'llm.primary_provider',
+  'llm.gemini_enabled',
+  'llm.groq_enabled',
 ]
 
 // GET /api/admin/settings — return all settings (admin only)

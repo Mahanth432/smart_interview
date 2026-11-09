@@ -10,17 +10,19 @@ datasource db {
 }
 
 model User {
-  id           Int                @id @default(autoincrement())
-  username     String             @unique
-  email        String?            @unique
-  passwordHash String?
-  role         String             @default("INTERVIEWER")
-  createdAt    DateTime           @default(now())
-  documents    Document[]
-  sessions     InterviewSession[]
-  auditLogs    AuditLog[]
-  candidate    Candidate?
-  otps         OtpVerification[]
+  id            Int                @id @default(autoincrement())
+  username      String             @unique
+  email         String?            @unique
+  name          String?
+  passwordHash  String?
+  role          String             @default("INTERVIEWER")
+  emailVerified Boolean            @default(false)
+  createdAt     DateTime           @default(now())
+  documents     Document[]
+  sessions      InterviewSession[]
+  auditLogs     AuditLog[]
+  candidate     Candidate?
+  otps          OtpVerification[]
 }
 
 model Document {
@@ -197,6 +199,7 @@ model OtpVerification {
   userId    Int?
   email     String
   otpHash   String
+  purpose   String    @default("EMAIL_VERIFICATION")
   expiresAt DateTime
   attempts  Int       @default(0)
   usedAt    DateTime?

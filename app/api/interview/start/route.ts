@@ -101,13 +101,10 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Resolve initial LLM provider from request or cookie
-    const { cookies } = await import("next/headers");
-    const cookieStore = await cookies();
-    const storedLLM = cookieStore.get('selectedLLM')?.value;
-    const chosenProvider = forceProvider && (forceProvider === 'gemini' || forceProvider === 'groq')
+    // LLM Provider resolution - ONLY ADMIN users can pass a forced provider for controlled testing
+    const adminForcedProvider = userRole === 'ADMIN' && forceProvider && (forceProvider === 'gemini' || forceProvider === 'groq')
       ? forceProvider
-      : (storedLLM === 'groq' || storedLLM === 'gemini' ? storedLLM : 'gemini');
+      : undefined;
 
     // Create Session
     const session = await prisma.interviewSession.create({
@@ -121,8 +118,7 @@ export async function POST(req: NextRequest) {
           subject: subject,
           mode: mode || "standard",
           setupData: setupData || "",
-          selectedDocumentIds: selectedDocIds || null,
-          llmProvider: chosenProvider
+          selectedDocumentIds: selectedDocIds || null
         }
       }
     });
@@ -135,7 +131,7 @@ export async function POST(req: NextRequest) {
       action: auditAction,
       entityType: 'InterviewSession',
       entityId: session.id,
-      metadata: { candidateName: candidate.name, subject, mode: mode || 'standard', selectedDocumentIds: selectedDocIds, llmProvider: chosenProvider }
+      metadata: { candidateName: candidate.name, subject, mode: mode || 'standard', selectedDocumentIds: selectedDocIds }
     });
 
     let contextText = "";
@@ -162,11 +158,15 @@ export async function POST(req: NextRequest) {
       .replace("{{topic}}", topicToStart)
       .replace("{{difficulty}}", "easy")
       .replace("{{context}}", contextText)
+      .replace("{{previous_question}}", "None - Starting Interview")
+      .replace("{{candidate_answer}}", "None - Starting Interview")
+      .replace("{{evaluation_summary}}", "None - Initial Question Generation")
       .replace("{{previous_questions}}", "None")
+      .replace("{{earlier_context}}", "None - Interview Just Started")
       .replace("{{weak_concepts}}", "None")
       .replace("{{remaining_concepts}}", "All");
 
-    const { text: nextQResponse, provider } = await generateLLMResponse(generatorPrompt + "\n\nReply in strict JSON format.", chosenProvider);
+    const { text: nextQResponse } = await generateLLMResponse(generatorPrompt + "\n\nReply in strict JSON format.", adminForcedProvider);
     
     let nextQJson;
     try {
@@ -199,7 +199,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       sessionId: session.id,
       candidate: candidate,
-      provider, firstQuestion: {
+      firstQuestion: {
         id: firstQuestion.id,
         content: firstQuestion.content,
         questionNumber: firstQuestion.questionNumber

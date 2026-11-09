@@ -5,68 +5,68 @@ interface DashboardStatsProps {
   totalSessions: number
   completedSessions: number
   activeSession: { candidate?: { name?: string } } | null
+  averageScore?: number | null
 }
 
-export const DashboardStats = ({ totalSessions, completedSessions, activeSession }: DashboardStatsProps) => {
-
-  const cardStyle = {
-    background: 'var(--color-card-bg)',
-    border: '1px solid var(--color-card-border)',
-    borderRadius: '16px',
-    padding: '1.5rem',
-    display: 'flex',
-    alignItems: 'flex-start',
-    gap: '1.25rem'
-  }
-
-  const iconWrap = (color: string) => ({
-    width: '48px', height: '48px', borderRadius: '12px',
-    background: `rgba(${color}, 0.1)`,
-    border: `1px solid rgba(${color}, 0.2)`,
-    color: `rgb(${color})`,
-    display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0
-  })
+export const DashboardStats = ({ totalSessions, completedSessions, activeSession, averageScore }: DashboardStatsProps) => {
+  const completionRate = totalSessions > 0 ? Math.round((completedSessions / totalSessions) * 100) : 0
 
   return (
-    <div className="dashboard-stats-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '1.5rem' }}>
-      
-      <div style={cardStyle}>
-        <div style={iconWrap('59, 130, 246')}><Icon name="analytics" size={24} /></div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-          <span style={{ fontSize: '0.85rem', color: 'var(--color-text-secondary)', fontWeight: 500 }}>Total Evaluations</span>
-          <div style={{ display: 'flex', alignItems: 'baseline', gap: '0.5rem' }}>
-            <span style={{ fontSize: '1.75rem', fontWeight: 700, color: 'var(--color-text-primary)' }}>{totalSessions}</span>
-          </div>
+    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1.25rem', marginBottom: '1.75rem' }}>
+      {/* Total Sessions */}
+      <div className="zentra-card">
+        <div className="zentra-card-header" style={{ marginBottom: '0.75rem' }}>
+          <span className="zentra-metric-label">Conducted Sessions</span>
+          <span className="zentra-pill-tag blue">
+            <Icon name="assignment" size={13} /> Evaluated
+          </span>
         </div>
+        <div className="zentra-metric-num">{totalSessions}</div>
+        <div className="zentra-metric-sub">{completedSessions} completed sessions</div>
       </div>
 
-      <div style={cardStyle}>
-        <div style={iconWrap('16, 185, 129')}><Icon name="check_circle" size={24} /></div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
-          <span style={{ fontSize: '0.85rem', color: 'var(--color-text-secondary)', fontWeight: 500 }}>Completed Sessions</span>
-          <div style={{ fontSize: '1.75rem', fontWeight: 700, color: 'var(--color-text-primary)' }}>{completedSessions}</div>
-          <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.25rem' }}>Reports generated</span>
+      {/* Completed Sessions */}
+      <div className="zentra-card">
+        <div className="zentra-card-header" style={{ marginBottom: '0.75rem' }}>
+          <span className="zentra-metric-label">Completed Sessions</span>
+          <span className="zentra-pill-tag green">
+            <Icon name="trending_up" size={13} /> {completionRate}% rate
+          </span>
         </div>
+        <div className="zentra-metric-num" style={{ color: '#10b981' }}>{completedSessions}</div>
+        <div className="zentra-metric-sub">Full reports generated</div>
       </div>
 
-      <div style={{...cardStyle, border: activeSession ? '1px solid rgba(245, 158, 11, 0.3)' : cardStyle.border, background: activeSession ? 'rgba(245, 158, 11, 0.02)' : cardStyle.background }}>
-        <div style={iconWrap('245, 158, 11')}><Icon name="record_voice_over" size={24} /></div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.25rem', width: '100%' }}>
-          <span style={{ fontSize: '0.85rem', color: 'var(--color-text-secondary)', fontWeight: 500 }}>Live Sessions</span>
-          <div style={{ fontSize: '1.75rem', fontWeight: 700, color: activeSession ? '#f59e0b' : '#f8fafc' }}>{activeSession ? 1 : 0}</div>
-          {activeSession ? (
-            <span style={{ fontSize: '0.75rem', color: '#d97706', marginTop: '0.25rem', display: 'flex', alignItems: 'center', gap: '0.25rem', background: 'rgba(245, 158, 11, 0.1)', padding: '4px 8px', borderRadius: '4px', width: 'fit-content' }}>
-              <Icon name="mic" size={12} /> {activeSession.candidate?.name || 'Active'}
-            </span>
-          ) : (
-            <span style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.25rem' }}>No active interviews</span>
-          )}
+      {/* Average Score */}
+      <div className="zentra-card">
+        <div className="zentra-card-header" style={{ marginBottom: '0.75rem' }}>
+          <span className="zentra-metric-label">Average Score</span>
+          <span className="zentra-pill-tag">
+            {averageScore && averageScore >= 70 ? 'Satisfactory' : 'Adaptive'}
+          </span>
         </div>
+        <div className="zentra-metric-num">
+          {averageScore !== undefined && averageScore !== null ? `${Math.round(averageScore)}%` : '—'}
+        </div>
+        <div className="zentra-metric-sub">Mean score of candidates</div>
       </div>
 
+      {/* Live / In-Progress */}
+      <div className="zentra-card" style={{ borderColor: activeSession ? 'rgba(245, 158, 11, 0.4)' : undefined }}>
+        <div className="zentra-card-header" style={{ marginBottom: '0.75rem' }}>
+          <span className="zentra-metric-label">Live Active Sessions</span>
+          <span className={`zentra-pill-tag ${activeSession ? 'green' : ''}`}>
+            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: activeSession ? '#10b981' : '#94a3b8', display: 'inline-block' }}></span>
+            {activeSession ? 'In Progress' : 'Idle'}
+          </span>
+        </div>
+        <div className="zentra-metric-num" style={{ color: activeSession ? '#f59e0b' : 'var(--zentra-text-primary)' }}>
+          {activeSession ? 1 : 0}
+        </div>
+        <div className="zentra-metric-sub">
+          {activeSession ? `Active candidate: ${activeSession.candidate?.name || 'In Progress'}` : 'No active sessions'}
+        </div>
+      </div>
     </div>
   )
 }
-
-
-

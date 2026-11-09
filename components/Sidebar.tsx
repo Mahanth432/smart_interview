@@ -14,52 +14,118 @@ export const Sidebar = ({ role = 'INTERVIEWER' }: SidebarProps) => {
   const pathname = usePathname()
 
   const navItems = role === 'CANDIDATE' ? [
-    { href: '/candidate', icon: 'dashboard', text: 'Candidate Dashboard' },
-    { href: '/report', icon: 'analytics', text: 'Interview History / My Reports' },
-    { href: '/candidate?tab=performance', icon: 'trending_up', text: 'Performance' },
-    { href: '/settings', icon: 'settings', text: 'Settings & Profile' },
+    { href: '/candidate', icon: 'dashboard', text: 'My Results' },
+    { href: '/report', icon: 'description', text: 'My Reports' },
+    { href: '/settings', icon: 'settings', text: 'Settings' },
   ] : [
     { href: '/dashboard', icon: 'dashboard', text: 'Overview Hub' },
     { href: '/interview', icon: 'mic', text: 'Live Interview' },
-    { href: '/candidate', icon: 'person', text: 'Candidate Profile' },
+    { href: '/candidate', icon: 'person', text: 'Candidates' },
     { href: '/suggestions', icon: 'lightbulb', text: 'Question Bank' },
-    { href: '/report', icon: 'analytics', text: 'Evaluation Report' },
-    { href: '/knowledge-base', icon: 'description', text: 'Knowledge Base' },
-    { href: '/settings', icon: 'settings', text: 'Settings & Config' },
+    { href: '/report', icon: 'analytics', text: 'Reports' },
+    { href: '/knowledge-base', icon: 'library_books', text: 'Knowledge Base' },
+    { href: '/settings', icon: 'settings', text: 'Settings' },
   ]
 
   return (
-    <aside className={`sidebar ${collapsed ? 'collapsed' : ''}`} id="sidebar">
-      <button 
-        className="sidebar-toggle-btn"
-        onClick={() => setCollapsed(!collapsed)}
-        aria-label="Toggle sidebar"
-        style={{ color: 'var(--color-text-secondary)', background: 'transparent', border: 'none', padding: '1rem', cursor: 'pointer' }}
-      >
-        <Icon name="menu" />
-      </button>
+    <aside
+      className={`sidebar ${collapsed ? 'collapsed' : ''}`}
+      id="sidebar"
+      style={{
+        width: collapsed ? '76px' : '250px',
+        background: 'var(--zentra-bg-surface)',
+        borderRight: '1px solid var(--zentra-border)',
+        display: 'flex',
+        flexDirection: 'column',
+        transition: 'width 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+        position: 'relative',
+        zIndex: 50,
+      }}
+    >
+      {/* Top Toggle Button */}
+      <div style={{
+        padding: '1rem',
+        display: 'flex',
+        justifyContent: collapsed ? 'center' : 'flex-end',
+        alignItems: 'center',
+        borderBottom: '1px solid var(--zentra-border-subtle)',
+      }}>
+        <button
+          onClick={() => setCollapsed(!collapsed)}
+          aria-label="Toggle sidebar"
+          style={{
+            background: 'var(--zentra-bg-muted)',
+            border: '1px solid var(--zentra-border)',
+            width: '32px',
+            height: '32px',
+            borderRadius: '50%',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'var(--zentra-text-secondary)',
+            cursor: 'pointer',
+            transition: 'all 0.2s',
+          }}
+        >
+          <Icon name={collapsed ? 'chevron_right' : 'chevron_left'} size={18} />
+        </button>
+      </div>
 
-      <nav className="sidebar-nav">
-        <ul style={{ listStyle: 'none', padding: '0 0.75rem', margin: 0, display: 'flex', flexDirection: 'column', gap: '0.25rem' }}>
+      {/* Pill Navigation List */}
+      <nav style={{ flex: 1, padding: '1rem 0.75rem', overflowY: 'auto' }}>
+        <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
           {navItems.map((item) => {
-            const isActive = pathname === item.href
+            // Strip query string for base path comparison
+            const itemBasePath = item.href.split('?')[0]
+            // For /report paths, also match /report/[id] sub-pages
+            const isActive = pathname === itemBasePath ||
+              (itemBasePath === '/report' && pathname.startsWith('/report/'))
             return (
               <li key={item.href}>
-                <Link href={item.href} prefetch={false} style={{ 
-                  display: 'flex', alignItems: 'center', gap: '0.75rem', padding: '0.6rem 1rem', 
-                  borderRadius: '8px', color: isActive ? '#f8fafc' : '#94a3b8', 
-                  background: isActive ? 'rgba(99, 102, 241, 0.15)' : 'transparent',
-                  textDecoration: 'none', fontSize: '0.9rem', fontWeight: isActive ? 500 : 400,
-                  transition: 'all 0.2s',
-                  position: 'relative'
-                }}>
-                  <div style={{ color: isActive ? '#818cf8' : '#64748b' }}>
-                    <Icon name={item.icon} size={20} />
+                <Link
+                  href={item.href}
+                  prefetch={true}
+                  title={collapsed ? item.text : undefined}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.75rem',
+                    padding: collapsed ? '0.65rem' : '0.65rem 1.15rem',
+                    justifyContent: collapsed ? 'center' : 'flex-start',
+                    borderRadius: '9999px',
+                    textDecoration: 'none',
+                    fontSize: '0.875rem',
+                    fontWeight: isActive ? 600 : 500,
+                    transition: 'all 0.2s ease',
+                    background: isActive ? 'var(--zentra-pill-active-bg)' : 'transparent',
+                    color: isActive ? 'var(--zentra-pill-active-text)' : 'var(--zentra-pill-inactive-text)',
+                    boxShadow: isActive ? '0 2px 8px rgba(0,0,0,0.08)' : 'none',
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!isActive) {
+                      e.currentTarget.style.backgroundColor = 'var(--zentra-pill-hover-bg)'
+                      e.currentTarget.style.color = 'var(--zentra-text-primary)'
+                    }
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!isActive) {
+                      e.currentTarget.style.backgroundColor = 'transparent'
+                      e.currentTarget.style.color = 'var(--zentra-pill-inactive-text)'
+                    }
+                  }}
+                >
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    color: isActive ? 'inherit' : 'var(--zentra-text-muted)',
+                  }}>
+                    <Icon name={item.icon} size={19} />
                   </div>
-                  {!collapsed && <span className="nav-text" style={{ flex: 1 }}>{item.text}</span>}
-                  
-                  {!collapsed && item.href === '/suggestions' && (
-                    <span style={{ background: '#6366f1', color: 'var(--color-text-primary)', fontSize: '0.7rem', padding: '2px 6px', borderRadius: '12px', fontWeight: 600 }}>12</span>
+                  {!collapsed && (
+                    <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {item.text}
+                    </span>
                   )}
                 </Link>
               </li>
@@ -68,18 +134,26 @@ export const Sidebar = ({ role = 'INTERVIEWER' }: SidebarProps) => {
         </ul>
       </nav>
 
-      <div className="sidebar-footer">
-        <div className="sidebar-system-status" style={{ background: 'var(--color-bg-tertiary)', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--color-card-border)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.25rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981' }}></div>
-              {!collapsed && <span style={{ color: '#10b981', fontSize: '0.8rem', fontWeight: 500 }}>RAG Engine Online</span>}
+      {/* System Status Footnote Card - Admin / Interviewer internal readiness */}
+      {!collapsed && role !== 'CANDIDATE' && (
+        <div style={{ padding: '0.85rem 1rem', borderTop: '1px solid var(--zentra-border-subtle)' }}>
+          <div style={{
+            background: 'var(--zentra-bg-muted)',
+            border: '1px solid var(--zentra-border)',
+            borderRadius: '16px',
+            padding: '0.75rem 1rem',
+          }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.2rem' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#10b981', display: 'inline-block', boxShadow: '0 0 6px #10b981' }}></span>
+                <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--zentra-text-primary)' }}>RAG Pipeline</span>
+              </div>
+              <span style={{ fontSize: '0.7rem', color: '#10b981', fontWeight: 600 }}>Active</span>
             </div>
-            {!collapsed && <div style={{ color: '#6366f1' }}><Icon name="analytics" size={16} /></div>}
+            <div style={{ fontSize: '0.7rem', color: 'var(--zentra-text-muted)' }}>Adaptive Engine Ready</div>
           </div>
-          {!collapsed && <div style={{ color: 'var(--color-text-muted)', fontSize: '0.7rem', marginTop: '0.25rem' }}>All systems operational</div>}
         </div>
-      </div>
+      )}
     </aside>
   )
 }

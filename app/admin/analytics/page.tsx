@@ -1,6 +1,6 @@
 'use client'
 
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useCallback } from 'react'
 import Icon from '@/components/Icon'
 import { formatScore } from '@/lib/formatters'
 import {
@@ -64,7 +64,7 @@ export default function AdminAnalyticsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  const fetchAnalytics = async () => {
+  const fetchAnalytics = useCallback(async () => {
     setLoading(true)
     setError(null)
     try {
@@ -81,20 +81,18 @@ export default function AdminAnalyticsPage() {
     } finally {
       setLoading(false)
     }
-  }
+  }, [])
 
   useEffect(() => {
     fetchAnalytics()
-  }, [])
+  }, [fetchAnalytics])
 
   if (loading) {
     return (
-      <div style={{ maxWidth: '1400px', margin: '0 auto', padding: '2rem 0' }}>
-        <h1 style={{ fontSize: '1.875rem', fontWeight: 700, marginBottom: '2rem', color: 'var(--color-text-primary)' }}>
-          Analytics Dashboard
-        </h1>
-        <div style={{ backgroundColor: 'var(--color-card-bg)', border: '1px solid var(--color-card-border)', borderRadius: '12px', padding: '3rem', textAlign: 'center', color: 'var(--color-text-secondary)' }}>
-          Loading real-time analytics data...
+      <div className="zentra-page-container">
+        <div className="zentra-card" style={{ padding: '4rem', textAlign: 'center', color: 'var(--zentra-text-muted)' }}>
+          <Icon name="analytics" size={32} style={{ marginBottom: '0.75rem', color: '#2563eb' }} />
+          <div>Aggregating platform performance metrics...</div>
         </div>
       </div>
     )
@@ -102,17 +100,12 @@ export default function AdminAnalyticsPage() {
 
   if (error || !data) {
     return (
-      <div style={{ maxWidth: '1400px', margin: '0 auto', padding: '2rem 0' }}>
-        <h1 style={{ fontSize: '1.875rem', fontWeight: 700, marginBottom: '2rem', color: 'var(--color-text-primary)' }}>
-          Analytics Dashboard
-        </h1>
-        <div style={{ backgroundColor: 'var(--color-card-bg)', border: '1px solid var(--color-card-border)', borderRadius: '12px', padding: '2rem', color: '#ef4444', textAlign: 'center' }}>
-          {error || 'Unable to display analytics'}
-          <div style={{ marginTop: '1rem' }}>
-            <button onClick={fetchAnalytics} style={{ padding: '0.5rem 1rem', borderRadius: '6px', border: 'none', backgroundColor: '#6366f1', color: '#fff', cursor: 'pointer' }}>
-              Retry
-            </button>
-          </div>
+      <div className="zentra-page-container">
+        <div className="zentra-card" style={{ padding: '3rem', textAlign: 'center', borderColor: 'rgba(239,68,68,0.2)' }}>
+          <div style={{ color: '#dc2626', marginBottom: '1rem', fontWeight: 600 }}>{error || 'Unable to display analytics'}</div>
+          <button onClick={fetchAnalytics} className="zentra-btn zentra-btn-primary">
+            Retry
+          </button>
         </div>
       </div>
     )
@@ -120,17 +113,17 @@ export default function AdminAnalyticsPage() {
 
   const { metrics, scores, statusBreakdown, difficultyBreakdown, activityTrend, interviewerPerformance } = data
 
-  // Chart 1: 30-Day Activity Trend Data
+  // Activity chart
   const activityChartData = {
-    labels: activityTrend.map((item) => item.date.slice(5)), // MM-DD
+    labels: activityTrend.map((item) => item.date.slice(5)),
     datasets: [
       {
         label: 'Total Sessions',
         data: activityTrend.map((item) => item.count),
-        borderColor: '#6366f1',
-        backgroundColor: 'rgba(99, 102, 241, 0.1)',
+        borderColor: '#2563eb',
+        backgroundColor: 'rgba(37, 99, 235, 0.12)',
         borderWidth: 2,
-        tension: 0.3,
+        tension: 0.35,
         fill: true,
       },
       {
@@ -139,7 +132,7 @@ export default function AdminAnalyticsPage() {
         borderColor: '#10b981',
         backgroundColor: 'rgba(16, 185, 129, 0.1)',
         borderWidth: 2,
-        tension: 0.3,
+        tension: 0.35,
         fill: true,
       },
     ],
@@ -151,39 +144,38 @@ export default function AdminAnalyticsPage() {
     plugins: {
       legend: {
         position: 'top' as const,
-        labels: { color: 'var(--color-text-secondary)', font: { size: 12 } },
+        labels: { color: '#64748b', font: { size: 12, family: 'Inter' }, usePointStyle: true },
       },
       tooltip: {
-        backgroundColor: 'rgba(15, 22, 42, 0.9)',
+        backgroundColor: '#0f172a',
         titleColor: '#fff',
         bodyColor: '#cbd5e1',
-        borderColor: 'rgba(255,255,255,0.1)',
-        borderWidth: 1,
+        padding: 10,
+        cornerRadius: 8,
       },
     },
     scales: {
       x: {
         grid: { display: false },
-        ticks: { color: 'var(--color-text-muted)', maxTicksLimit: 10 },
+        ticks: { color: '#94a3b8', maxTicksLimit: 12, font: { size: 11, family: 'Inter' } },
       },
       y: {
         beginAtZero: true,
-        ticks: { color: 'var(--color-text-muted)', precision: 0 },
-        grid: { color: 'rgba(255, 255, 255, 0.05)' },
+        ticks: { color: '#94a3b8', precision: 0, font: { size: 11, family: 'Inter' } },
+        grid: { color: 'rgba(226, 232, 240, 0.6)' },
       },
     },
   }
 
-  // Chart 2: Status Breakdown Data
-  const statusColors = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6']
+  // Status chart
+  const statusColors = ['#10b981', '#2563eb', '#f59e0b', '#ef4444', '#8b5cf6']
   const statusChartData = {
     labels: statusBreakdown.map((item) => item.status.toUpperCase()),
     datasets: [
       {
         data: statusBreakdown.map((item) => item.count),
         backgroundColor: statusColors.slice(0, statusBreakdown.length),
-        borderWidth: 1,
-        borderColor: 'var(--color-card-bg)',
+        borderWidth: 0,
       },
     ],
   }
@@ -191,23 +183,24 @@ export default function AdminAnalyticsPage() {
   const statusChartOptions = {
     responsive: true,
     maintainAspectRatio: false,
+    cutout: '70%',
     plugins: {
       legend: {
         position: 'bottom' as const,
-        labels: { color: 'var(--color-text-secondary)', font: { size: 12 } },
+        labels: { color: '#64748b', font: { size: 11, family: 'Inter' }, usePointStyle: true, padding: 12 },
       },
     },
   }
 
-  // Chart 3: Difficulty Distribution Data
+  // Difficulty chart
   const difficultyChartData = {
     labels: difficultyBreakdown.map((item) => item.difficulty.toUpperCase()),
     datasets: [
       {
         label: 'Sessions',
         data: difficultyBreakdown.map((item) => item.count),
-        backgroundColor: 'rgba(99, 102, 241, 0.7)',
-        borderRadius: 6,
+        backgroundColor: 'rgba(37, 99, 235, 0.85)',
+        borderRadius: 8,
       },
     ],
   }
@@ -215,206 +208,229 @@ export default function AdminAnalyticsPage() {
   const difficultyChartOptions = {
     responsive: true,
     maintainAspectRatio: false,
-    plugins: {
-      legend: { display: false },
-    },
+    plugins: { legend: { display: false } },
     scales: {
       x: {
         grid: { display: false },
-        ticks: { color: 'var(--color-text-muted)' },
+        ticks: { color: '#94a3b8', font: { size: 11, family: 'Inter' } },
       },
       y: {
         beginAtZero: true,
-        ticks: { color: 'var(--color-text-muted)', precision: 0 },
-        grid: { color: 'rgba(255, 255, 255, 0.05)' },
+        ticks: { color: '#94a3b8', precision: 0, font: { size: 11, family: 'Inter' } },
+        grid: { color: 'rgba(226, 232, 240, 0.6)' },
       },
     },
   }
 
   return (
-    <div style={{ maxWidth: '1400px', margin: '0 auto', color: 'var(--color-text-primary)' }}>
-      {/* Title */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem', flexWrap: 'wrap', gap: '1rem' }}>
+    <div className="zentra-page-container">
+      {/* Header */}
+      <div className="zentra-page-header">
         <div>
-          <h1 style={{ fontSize: '1.875rem', fontWeight: 700, margin: 0 }}>Analytics Dashboard</h1>
-          <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem', marginTop: '0.25rem' }}>
-            Real-time metric aggregations and interview performance statistics.
-          </p>
+          <div className="zentra-title-row">
+            <h1 className="zentra-page-title">Analytics</h1>
+            <span className="zentra-link-bubble" title="System Analytics">
+              <Icon name="link" size={16} />
+            </span>
+          </div>
+          <p className="zentra-page-subtitle">Real-time database aggregations, scoring curves, and interviewer velocity.</p>
         </div>
-        <button
-          onClick={fetchAnalytics}
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            padding: '0.6rem 1.2rem',
-            borderRadius: '8px',
-            border: '1px solid var(--color-card-border)',
-            backgroundColor: 'var(--color-card-bg)',
-            color: 'var(--color-text-primary)',
-            cursor: 'pointer',
-            fontSize: '0.875rem',
-            fontWeight: 500,
-          }}
-        >
-          <Icon name="refresh" size={18} />
-          Refresh Data
-        </button>
+
+        <div className="zentra-header-actions">
+          <div className="zentra-date-pill">
+            <Icon name="calendar_today" size={15} style={{ color: 'var(--zentra-text-muted)' }} />
+            <span>Last 30 Days</span>
+            <span className="zentra-compare-label">live DB</span>
+          </div>
+          <button onClick={fetchAnalytics} className="zentra-btn zentra-btn-secondary">
+            <Icon name="refresh" size={16} />
+            <span>Refresh</span>
+          </button>
+        </div>
       </div>
 
       {/* Top Overview Cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.25rem', marginBottom: '2rem' }}>
-        <div style={{ backgroundColor: 'var(--color-card-bg)', border: '1px solid var(--color-card-border)', borderRadius: '12px', padding: '1.25rem' }}>
-          <div style={{ fontSize: '0.85rem', color: 'var(--color-text-secondary)', marginBottom: '0.5rem' }}>Total Interviews</div>
-          <div style={{ fontSize: '1.75rem', fontWeight: 700, color: 'var(--color-text-primary)' }}>{metrics.totalInterviews}</div>
-          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.25rem' }}>Across all interviewers</div>
-        </div>
-
-        <div style={{ backgroundColor: 'var(--color-card-bg)', border: '1px solid var(--color-card-border)', borderRadius: '12px', padding: '1.25rem' }}>
-          <div style={{ fontSize: '0.85rem', color: 'var(--color-text-secondary)', marginBottom: '0.5rem' }}>Completed Interviews</div>
-          <div style={{ fontSize: '1.75rem', fontWeight: 700, color: '#10b981' }}>{metrics.completedInterviews}</div>
-          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.25rem' }}>
-            Completion Rate: <strong>{metrics.completionRate}%</strong>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '1.25rem', marginBottom: '1.75rem' }}>
+        <div className="zentra-card">
+          <div className="zentra-card-header" style={{ marginBottom: '0.75rem' }}>
+            <span className="zentra-metric-label">Total Interviews</span>
+            <span className="zentra-pill-tag">System</span>
           </div>
+          <div className="zentra-metric-num">{metrics.totalInterviews}</div>
+          <div className="zentra-metric-sub">Across all interviewers</div>
         </div>
 
-        <div style={{ backgroundColor: 'var(--color-card-bg)', border: '1px solid var(--color-card-border)', borderRadius: '12px', padding: '1.25rem' }}>
-          <div style={{ fontSize: '0.85rem', color: 'var(--color-text-secondary)', marginBottom: '0.5rem' }}>In-Progress Sessions</div>
-          <div style={{ fontSize: '1.75rem', fontWeight: 700, color: '#3b82f6' }}>{metrics.activeInterviews}</div>
-          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.25rem' }}>Currently active</div>
+        <div className="zentra-card">
+          <div className="zentra-card-header" style={{ marginBottom: '0.75rem' }}>
+            <span className="zentra-metric-label">Completed Sessions</span>
+            <span className="zentra-pill-tag green">{metrics.completionRate}% rate</span>
+          </div>
+          <div className="zentra-metric-num" style={{ color: '#10b981' }}>{metrics.completedInterviews}</div>
+          <div className="zentra-metric-sub">{metrics.activeInterviews} currently active</div>
         </div>
 
-        <div style={{ backgroundColor: 'var(--color-card-bg)', border: '1px solid var(--color-card-border)', borderRadius: '12px', padding: '1.25rem' }}>
-          <div style={{ fontSize: '0.85rem', color: 'var(--color-text-secondary)', marginBottom: '0.5rem' }}>Total Candidates</div>
-          <div style={{ fontSize: '1.75rem', fontWeight: 700, color: '#8b5cf6' }}>{metrics.totalCandidates}</div>
-          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.25rem' }}>Registered candidate profiles</div>
+        <div className="zentra-card">
+          <div className="zentra-card-header" style={{ marginBottom: '0.75rem' }}>
+            <span className="zentra-metric-label">Active Candidates</span>
+            <span className="zentra-pill-tag blue">Profiles</span>
+          </div>
+          <div className="zentra-metric-num">{metrics.totalCandidates}</div>
+          <div className="zentra-metric-sub">Registered platform pool</div>
         </div>
 
-        <div style={{ backgroundColor: 'var(--color-card-bg)', border: '1px solid var(--color-card-border)', borderRadius: '12px', padding: '1.25rem' }}>
-          <div style={{ fontSize: '0.85rem', color: 'var(--color-text-secondary)', marginBottom: '0.5rem' }}>Total Interviewers</div>
-          <div style={{ fontSize: '1.75rem', fontWeight: 700, color: '#f59e0b' }}>{metrics.totalInterviewers}</div>
-          <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.25rem' }}>Active interviewer accounts</div>
+        <div className="zentra-card">
+          <div className="zentra-card-header" style={{ marginBottom: '0.75rem' }}>
+            <span className="zentra-metric-label">Interviewers</span>
+            <span className="zentra-pill-tag">Recruiters</span>
+          </div>
+          <div className="zentra-metric-num">{metrics.totalInterviewers}</div>
+          <div className="zentra-metric-sub">Conducting interviews</div>
         </div>
       </div>
 
       {/* Score Analytics Card */}
-      <div style={{ backgroundColor: 'var(--color-card-bg)', border: '1px solid var(--color-card-border)', borderRadius: '12px', padding: '1.5rem', marginBottom: '2rem' }}>
-        <h3 style={{ margin: '0 0 1rem 0', fontSize: '1.1rem', fontWeight: 600, color: 'var(--color-text-primary)' }}>
-          Candidate Score Analytics
-        </h3>
+      <div className="zentra-card" style={{ marginBottom: '1.75rem' }}>
+        <div className="zentra-card-header">
+          <div>
+            <h2 className="zentra-card-title">Candidate Score Analytics</h2>
+            <span style={{ fontSize: '0.8rem', color: 'var(--zentra-text-muted)' }}>Distribution across scored evaluations</span>
+          </div>
+          <span className="zentra-dot-menu">&bull;&bull;&bull;</span>
+        </div>
+
         {scores.scoredInterviewsCount === 0 || scores.averageScore === null ? (
-          <div style={{ padding: '1.5rem', textAlign: 'center', color: 'var(--color-text-secondary)', backgroundColor: 'var(--color-bg-secondary)', borderRadius: '8px' }}>
-            No evaluation data available yet.
+          <div style={{ padding: '2rem', textAlign: 'center', color: 'var(--zentra-text-muted)' }}>
+            No evaluated interview scores available yet.
           </div>
         ) : (
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '1rem' }}>
-            <div style={{ backgroundColor: 'var(--color-bg-secondary)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--color-card-border)' }}>
-              <div style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>Average Score</div>
-              <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#6366f1', marginTop: '0.25rem' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '1rem' }}>
+            <div style={{ background: 'var(--zentra-bg-muted)', padding: '1.25rem', borderRadius: '16px', border: '1px solid var(--zentra-border)' }}>
+              <div style={{ fontSize: '0.8rem', color: 'var(--zentra-text-secondary)', fontWeight: 500 }}>Average Score</div>
+              <div style={{ fontSize: '2rem', fontWeight: 700, color: '#2563eb', marginTop: '0.25rem' }}>
                 {formatScore(scores.averageScore)}
               </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--zentra-text-muted)', marginTop: '0.25rem' }}>All scored sessions</div>
             </div>
-            <div style={{ backgroundColor: 'var(--color-bg-secondary)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--color-card-border)' }}>
-              <div style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>Highest Score</div>
-              <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#10b981', marginTop: '0.25rem' }}>
+
+            <div style={{ background: 'var(--zentra-bg-muted)', padding: '1.25rem', borderRadius: '16px', border: '1px solid var(--zentra-border)' }}>
+              <div style={{ fontSize: '0.8rem', color: 'var(--zentra-text-secondary)', fontWeight: 500 }}>Highest Score</div>
+              <div style={{ fontSize: '2rem', fontWeight: 700, color: '#10b981', marginTop: '0.25rem' }}>
                 {formatScore(scores.highestScore)}
               </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--zentra-text-muted)', marginTop: '0.25rem' }}>Peak evaluation</div>
             </div>
-            <div style={{ backgroundColor: 'var(--color-bg-secondary)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--color-card-border)' }}>
-              <div style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>Lowest Score</div>
-              <div style={{ fontSize: '1.5rem', fontWeight: 700, color: '#ef4444', marginTop: '0.25rem' }}>
+
+            <div style={{ background: 'var(--zentra-bg-muted)', padding: '1.25rem', borderRadius: '16px', border: '1px solid var(--zentra-border)' }}>
+              <div style={{ fontSize: '0.8rem', color: 'var(--zentra-text-secondary)', fontWeight: 500 }}>Lowest Score</div>
+              <div style={{ fontSize: '2rem', fontWeight: 700, color: '#ef4444', marginTop: '0.25rem' }}>
                 {formatScore(scores.lowestScore)}
               </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--zentra-text-muted)', marginTop: '0.25rem' }}>Minimum threshold</div>
             </div>
-            <div style={{ backgroundColor: 'var(--color-bg-secondary)', padding: '1rem', borderRadius: '8px', border: '1px solid var(--color-card-border)' }}>
-              <div style={{ fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>Scored Interviews</div>
-              <div style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--color-text-primary)', marginTop: '0.25rem' }}>
+
+            <div style={{ background: 'var(--zentra-bg-muted)', padding: '1.25rem', borderRadius: '16px', border: '1px solid var(--zentra-border)' }}>
+              <div style={{ fontSize: '0.8rem', color: 'var(--zentra-text-secondary)', fontWeight: 500 }}>Scored Sessions</div>
+              <div style={{ fontSize: '2rem', fontWeight: 700, color: 'var(--zentra-text-primary)', marginTop: '0.25rem' }}>
                 {scores.scoredInterviewsCount}
               </div>
+              <div style={{ fontSize: '0.75rem', color: 'var(--zentra-text-muted)', marginTop: '0.25rem' }}>Evaluated reports</div>
             </div>
           </div>
         )}
       </div>
 
       {/* Charts Grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.5rem', marginBottom: '2rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '1.5rem', marginBottom: '1.75rem' }}>
         {/* 30-Day Activity Trend */}
-        <div style={{ backgroundColor: 'var(--color-card-bg)', border: '1px solid var(--color-card-border)', borderRadius: '12px', padding: '1.5rem', gridColumn: 'span 2' }}>
-          <h3 style={{ margin: '0 0 1rem 0', fontSize: '1.1rem', fontWeight: 600 }}>30-Day Interview Activity Trend</h3>
-          <div style={{ height: '300px', width: '100%' }}>
+        <div className="zentra-card" style={{ minHeight: '380px', display: 'flex', flexDirection: 'column' }}>
+          <div className="zentra-card-header">
+            <div>
+              <h2 className="zentra-card-title">Interview Activity Trend (30 Days)</h2>
+              <span style={{ fontSize: '0.8rem', color: 'var(--zentra-text-muted)' }}>Daily volume and completion rate</span>
+            </div>
+            <span className="zentra-dot-menu">&bull;&bull;&bull;</span>
+          </div>
+          <div style={{ flex: 1, minHeight: '270px' }}>
             <Line data={activityChartData} options={activityChartOptions} />
           </div>
         </div>
 
-        {/* Status Breakdown */}
-        <div style={{ backgroundColor: 'var(--color-card-bg)', border: '1px solid var(--color-card-border)', borderRadius: '12px', padding: '1.5rem' }}>
-          <h3 style={{ margin: '0 0 1rem 0', fontSize: '1.1rem', fontWeight: 600 }}>Status Distribution</h3>
-          {statusBreakdown.length === 0 ? (
-            <div style={{ padding: '3rem 1rem', textAlign: 'center', color: 'var(--color-text-secondary)' }}>
-              No status records available
+        {/* Status Distribution Doughnut */}
+        <div className="zentra-card" style={{ minHeight: '380px', display: 'flex', flexDirection: 'column' }}>
+          <div className="zentra-card-header">
+            <div>
+              <h2 className="zentra-card-title">Status Breakdown</h2>
+              <span style={{ fontSize: '0.8rem', color: 'var(--zentra-text-muted)' }}>Proportion by session state</span>
             </div>
-          ) : (
-            <div style={{ height: '260px', width: '100%' }}>
-              <Doughnut data={statusChartData} options={statusChartOptions} />
-            </div>
-          )}
+            <span className="zentra-dot-menu">&bull;&bull;&bull;</span>
+          </div>
+          <div style={{ flex: 1, minHeight: '270px', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <Doughnut data={statusChartData} options={statusChartOptions} />
+          </div>
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))', gap: '1.5rem', marginBottom: '2rem' }}>
-        {/* Difficulty Distribution */}
-        <div style={{ backgroundColor: 'var(--color-card-bg)', border: '1px solid var(--color-card-border)', borderRadius: '12px', padding: '1.5rem' }}>
-          <h3 style={{ margin: '0 0 1rem 0', fontSize: '1.1rem', fontWeight: 600 }}>Difficulty Distribution</h3>
-          {difficultyBreakdown.length === 0 ? (
-            <div style={{ padding: '3rem 1rem', textAlign: 'center', color: 'var(--color-text-secondary)' }}>
-              No difficulty records available
+      {/* Difficulty & Interviewer Performance */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(360px, 1fr))', gap: '1.5rem', marginBottom: '2rem' }}>
+        {/* Difficulty Distribution Bar */}
+        <div className="zentra-card" style={{ minHeight: '340px', display: 'flex', flexDirection: 'column' }}>
+          <div className="zentra-card-header">
+            <div>
+              <h2 className="zentra-card-title">Difficulty Distribution</h2>
+              <span style={{ fontSize: '0.8rem', color: 'var(--zentra-text-muted)' }}>Breakdown by level tier</span>
             </div>
-          ) : (
-            <div style={{ height: '240px', width: '100%' }}>
-              <Bar data={difficultyChartData} options={difficultyChartOptions} />
-            </div>
-          )}
+            <span className="zentra-dot-menu">&bull;&bull;&bull;</span>
+          </div>
+          <div style={{ flex: 1, minHeight: '240px' }}>
+            <Bar data={difficultyChartData} options={difficultyChartOptions} />
+          </div>
         </div>
 
-        {/* Interviewer Performance */}
-        <div style={{ backgroundColor: 'var(--color-card-bg)', border: '1px solid var(--color-card-border)', borderRadius: '12px', padding: '1.5rem', gridColumn: 'span 2' }}>
-          <h3 style={{ margin: '0 0 1rem 0', fontSize: '1.1rem', fontWeight: 600 }}>Interviewer Activity & Performance</h3>
+        {/* Interviewer Performance Table */}
+        <div className="zentra-card" style={{ padding: 0, overflow: 'hidden' }}>
+          <div style={{ padding: '1.25rem 1.5rem', borderBottom: '1px solid var(--zentra-border)' }}>
+            <h3 className="zentra-card-title">Interviewer Activity &amp; Velocity</h3>
+            <span style={{ fontSize: '0.8rem', color: 'var(--zentra-text-muted)' }}>Conducted evaluations per interviewer</span>
+          </div>
+
           <div style={{ overflowX: 'auto' }}>
-            <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '500px' }}>
+            <table className="zentra-table">
               <thead>
-                <tr style={{ borderBottom: '1px solid var(--color-card-border)', backgroundColor: 'var(--color-bg-secondary)' }}>
-                  <th style={{ padding: '0.75rem 1rem', fontSize: '0.85rem', color: 'var(--color-text-secondary)' }}>Interviewer</th>
-                  <th style={{ padding: '0.75rem 1rem', fontSize: '0.85rem', color: 'var(--color-text-secondary)' }}>Total Sessions</th>
-                  <th style={{ padding: '0.75rem 1rem', fontSize: '0.85rem', color: 'var(--color-text-secondary)' }}>Completed</th>
-                  <th style={{ padding: '0.75rem 1rem', fontSize: '0.85rem', color: 'var(--color-text-secondary)' }}>Average Score</th>
+                <tr>
+                  <th>Interviewer</th>
+                  <th>Sessions</th>
+                  <th>Completed</th>
+                  <th>Avg Score</th>
                 </tr>
               </thead>
               <tbody>
                 {interviewerPerformance.length === 0 ? (
                   <tr>
-                    <td colSpan={4} style={{ padding: '2rem', textAlign: 'center', color: 'var(--color-text-secondary)' }}>
-                      No interviewer data found.
+                    <td colSpan={4} style={{ padding: '2.5rem', textAlign: 'center', color: 'var(--zentra-text-muted)' }}>
+                      No interviewer sessions recorded yet.
                     </td>
                   </tr>
                 ) : (
                   interviewerPerformance.map((user) => (
-                    <tr key={user.id} style={{ borderBottom: '1px solid var(--color-card-border)' }}>
-                      <td style={{ padding: '0.75rem 1rem', fontWeight: 500, color: 'var(--color-text-primary)' }}>
+                    <tr key={user.id}>
+                      <td style={{ fontWeight: 600, color: 'var(--zentra-text-primary)' }}>
                         {user.username}
                       </td>
-                      <td style={{ padding: '0.75rem 1rem', color: 'var(--color-text-primary)' }}>
-                        {user.totalInterviews}
+                      <td>
+                        <span className="zentra-pill-tag">
+                          {user.totalInterviews} sessions
+                        </span>
                       </td>
-                      <td style={{ padding: '0.75rem 1rem', color: '#10b981', fontWeight: 500 }}>
+                      <td style={{ color: '#10b981', fontWeight: 600 }}>
                         {user.completedInterviews}
                       </td>
-                      <td style={{ padding: '0.75rem 1rem' }}>
+                      <td>
                         {user.averageScore !== null ? (
-                          <span style={{ fontWeight: 600, color: '#6366f1' }}>
+                          <span style={{ fontWeight: 600, color: '#2563eb' }}>
                             {formatScore(user.averageScore)}
                           </span>
                         ) : (
-                          <span style={{ color: 'var(--color-text-muted)', fontSize: '0.85rem' }}>—</span>
+                          <span style={{ color: 'var(--zentra-text-muted)' }}>—</span>
                         )}
                       </td>
                     </tr>

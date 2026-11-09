@@ -7,30 +7,25 @@ import { createAuditLog } from '@/lib/audit-log';
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { email, role } = body;
+    const { email, role, purpose = 'EMAIL_VERIFICATION' } = body;
 
-    if (!email || !role) {
-      return NextResponse.json({ error: 'Email and role are required.' }, { status: 400 });
+    if (!email) {
+      return NextResponse.json({ error: 'Email is required.' }, { status: 400 });
     }
 
     const normalizedEmail = email.trim().toLowerCase();
 
-    // Security check: Admin OTP login is strictly forbidden
-    if (role === 'ADMIN') {
-      return NextResponse.json(
-        { error: 'Admin accounts must authenticate using username and password.' },
-        { status: 403 }
-      );
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      return NextResponse.json({ error: 'Please enter a valid email address.' }, { status: 400 });
     }
 
-    if (role !== 'CANDIDATE' && role !== 'INTERVIEWER') {
-      return NextResponse.json({ error: 'Invalid role specified.' }, { status: 400 });
-    }
+    const otpPurpose = purpose === 'PASSWORD_RESET' ? 'PASSWORD_RESET' : 'EMAIL_VERIFICATION';
 
-    // Rate Limiting: Check cooldown (60 seconds)
+    // Rate Limiting: Check cooldown (60 seconds) for this email and purpose
     const recentOtp = await prisma.otpVerification.findFirst({
       where: {
         email: normalizedEmail,
+        purpose: otpPurpose,
         createdAt: { gt: new Date(Date.now() - OTP_COOLDOWN_SECONDS * 1000) },
       },
       orderBy: { createdAt: 'desc' },
@@ -51,13 +46,14 @@ export async function POST(req: NextRequest) {
     const hourlyCount = await prisma.otpVerification.count({
       where: {
         email: normalizedEmail,
+        purpose: otpPurpose,
         createdAt: { gt: oneHourAgo },
       },
     });
 
     if (hourlyCount >= 5) {
       return NextResponse.json(
-        { error: 'Too many OTP requests for this email. Please try again in an hour.' },
+        { error: 'Too many requests for this email. Please try again in an hour.' },
         { status: 429 }
       );
     }
@@ -74,10 +70,73 @@ export async function POST(req: NextRequest) {
       include: { candidate: true },
     });
 
-    // If user does not exist or role doesn't match, return generic success to avoid enumeration
-    if (!user || user.role !== role) {
+    // If PASSWORD_RESET flow:
+    if (otpPurpose === 'PASSWORD_RESET') {
+      // Generic success response regardless of user existence to prevent account enumeration
+      if (!user) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.log(`[password-reset] No user matched email: "${normalizedEmail}"`);
+        }
+        return NextResponse.json({
+          success: true,
+          message: 'If an account exists with this email, a verification code has been sent.',
+        });
+      }
+
+      // Invalidate any previous unused PASSWORD_RESET OTPs for this email
+      await prisma.otpVerification.updateMany({
+        where: { email: normalizedEmail, usedAt: null, purpose: 'PASSWORD_RESET' },
+        data: { usedAt: new Date() },
+      });
+
+      // Generate, hash, and store OTP
+      const otp = generateSecureOtp();
+      const otpHash = hashOtp(otp);
+      const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+
+      await prisma.otpVerification.create({
+        data: {
+          userId: user.id,
+          email: normalizedEmail,
+          otpHash,
+          purpose: 'PASSWORD_RESET',
+          expiresAt,
+          attempts: 0,
+        },
+      });
+
+      await sendOtpEmail({
+        email: normalizedEmail,
+        otp,
+        role: user.role,
+        purpose: 'PASSWORD_RESET',
+      });
+
+      createAuditLog({
+        userId: user.id,
+        username: user.username,
+        action: 'PASSWORD_RESET_OTP_REQUESTED',
+        status: 'SUCCESS',
+        metadata: { email: normalizedEmail },
+      });
+
+      return NextResponse.json({
+        success: true,
+        message: 'If an account exists with this email, a verification code has been sent.',
+      });
+    }
+
+    // EMAIL_VERIFICATION flow (for registration verification resends)
+    if (role === 'ADMIN') {
+      return NextResponse.json(
+        { error: 'Admin accounts do not require email verification.' },
+        { status: 403 }
+      );
+    }
+
+    if (!user || (role && user.role !== role)) {
       if (process.env.NODE_ENV !== 'production') {
-        console.log(`[request-otp] No active ${role} user matched email: "${normalizedEmail}"`);
+        console.log(`[request-otp] No matching user for verification email: "${normalizedEmail}"`);
       }
       return NextResponse.json({
         success: true,
@@ -85,42 +144,40 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    // Invalidate any previous unused OTPs for this email
+    // Invalidate previous unused EMAIL_VERIFICATION OTPs
     await prisma.otpVerification.updateMany({
-      where: { email: normalizedEmail, usedAt: null },
+      where: { email: normalizedEmail, usedAt: null, purpose: 'EMAIL_VERIFICATION' },
       data: { usedAt: new Date() },
     });
 
-    // Generate, hash, and store OTP
     const otp = generateSecureOtp();
     const otpHash = hashOtp(otp);
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000); // 5 minutes
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
 
     await prisma.otpVerification.create({
       data: {
         userId: user.id,
         email: normalizedEmail,
         otpHash,
+        purpose: 'EMAIL_VERIFICATION',
         expiresAt,
         attempts: 0,
       },
     });
 
-    // Send email (via SMTP or dev console mock)
     await sendOtpEmail({
       email: normalizedEmail,
       otp,
-      role: user.role as 'CANDIDATE' | 'INTERVIEWER',
+      role: user.role,
+      purpose: 'EMAIL_VERIFICATION',
     });
 
-    // Audit log request
-    const auditAction = role === 'CANDIDATE' ? 'CANDIDATE_OTP_REQUESTED' : 'INTERVIEWER_OTP_REQUESTED';
     createAuditLog({
       userId: user.id,
       username: user.username,
-      action: auditAction,
+      action: 'EMAIL_VERIFICATION_OTP_REQUESTED',
       status: 'SUCCESS',
-      metadata: { email: normalizedEmail },
+      metadata: { email: normalizedEmail, role: user.role },
     });
 
     return NextResponse.json({

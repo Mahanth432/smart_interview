@@ -171,7 +171,7 @@ export default function RegisterPage() {
       const res = await fetch('/api/auth/request-otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: registeredEmail, role }),
+        body: JSON.stringify({ email: registeredEmail, role, purpose: 'EMAIL_VERIFICATION' }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Failed to resend code')
@@ -195,7 +195,12 @@ export default function RegisterPage() {
       const res = await fetch('/api/auth/verify-otp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: registeredEmail, role, otp: otpString }),
+        body: JSON.stringify({
+          email: registeredEmail,
+          role,
+          otp: otpString,
+          purpose: 'EMAIL_VERIFICATION',
+        }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Verification failed')

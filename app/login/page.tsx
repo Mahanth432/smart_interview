@@ -1,326 +1,147 @@
 'use client'
 
-import React, { useState, useEffect, useRef, useCallback } from 'react'
+import React, { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import Icon from '@/components/Icon'
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-type Role = 'ADMIN' | 'INTERVIEWER' | 'CANDIDATE'
-
-// stage progression for Candidate / Interviewer
-type Stage = 'role-select' | 'password' | 'set-password' | 'otp'
-
-// ─── Helper: OTP digit input ──────────────────────────────────────────────────
-interface OtpInputProps {
-  value: string[]
-  onChange: (digits: string[]) => void
-}
-function OtpInput({ value, onChange }: OtpInputProps) {
-  const refs = useRef<Array<HTMLInputElement | null>>([])
-
-  const handleKey = (idx: number, e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Backspace') {
-      if (value[idx]) {
-        const next = [...value]
-        next[idx] = ''
-        onChange(next)
-      } else if (idx > 0) {
-        refs.current[idx - 1]?.focus()
-      }
-    }
-  }
-
-  const handleChange = (idx: number, e: React.ChangeEvent<HTMLInputElement>) => {
-    const raw = e.target.value.replace(/\D/g, '')
-    if (!raw) return
-    const chars = raw.split('')
-    const next = [...value]
-    let focusIdx = idx
-    chars.forEach((ch, i) => {
-      if (idx + i < 6) {
-        next[idx + i] = ch
-        focusIdx = idx + i
-      }
-    })
-    onChange(next)
-    if (focusIdx < 5) {
-      refs.current[focusIdx + 1]?.focus()
-    }
-  }
-
-  return (
-    <div style={{ display: 'flex', gap: '8px', justifyContent: 'center' }}>
-      {value.map((digit, i) => (
-        <input
-          key={i}
-          ref={(el) => { refs.current[i] = el }}
-          className="otp-box"
-          type="text"
-          inputMode="numeric"
-          maxLength={1}
-          value={digit}
-          placeholder="·"
-          autoFocus={i === 0}
-          onChange={(e) => handleChange(i, e)}
-          onKeyDown={(e) => handleKey(i, e)}
-          onFocus={(e) => e.target.select()}
-        />
-      ))}
-    </div>
-  )
-}
-
-// ─── Main Component ───────────────────────────────────────────────────────────
 export default function LoginPage() {
   const router = useRouter()
 
-  // Role & stage
-  const [selectedRole, setSelectedRole] = useState<Role | null>(null)
-  const [stage, setStage] = useState<Stage>('role-select')
+  // Form states
+  const [usernameOrEmail, setUsernameOrEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
 
-  // Admin fields
-  const [adminUsername, setAdminUsername] = useState('')
-  const [adminPassword, setAdminPassword] = useState('')
-  const [showAdminPassword, setShowAdminPassword] = useState(false)
+  // Status & error states
+  const [error, setError] = useState('')
+  const [successMsg, setSuccessMsg] = useState('')
+  const [isLoading, setIsLoading] = useState(false)
 
-  // C/I password stage
-  const [emailOrUsername, setEmailOrUsername] = useState('')
-  const [loginPassword, setLoginPassword] = useState('')
-  const [showLoginPassword, setShowLoginPassword] = useState(false)
-  const [verifiedEmail, setVerifiedEmail] = useState('') // email confirmed by server after password
-
-  // Set-password stage (for passwordless legacy accounts)
-  const [setPasswordEmail, setSetPasswordEmail] = useState('')
+  // Legacy passwordless account setup state
+  const [requiresPasswordSetup, setRequiresPasswordSetup] = useState(false)
+  const [legacyEmail, setLegacyEmail] = useState('')
   const [newPassword, setNewPassword] = useState('')
   const [confirmNewPassword, setConfirmNewPassword] = useState('')
   const [showNewPassword, setShowNewPassword] = useState(false)
   const [showConfirmNewPassword, setShowConfirmNewPassword] = useState(false)
 
-  // OTP stage
-  const [otpDigits, setOtpDigits] = useState(['', '', '', '', '', ''])
-  const [resendCooldown, setResendCooldown] = useState(0)
-
-  // UI
-  const [error, setError] = useState('')
-  const [successMsg, setSuccessMsg] = useState('')
-  const [isLoading, setIsLoading] = useState(false)
-
-  // ── URL param pre-fill ──────────────────────────────────────────────────────
+  // Check URL query parameters on mount
   useEffect(() => {
     if (typeof window === 'undefined') return
-    const p = new URLSearchParams(window.location.search)
-    const r = p.get('role')
-    const em = p.get('email')
-    const registered = p.get('registered')
+    const params = new URLSearchParams(window.location.search)
+    const emailParam = params.get('email')
+    const resetParam = params.get('reset')
+    const verifiedParam = params.get('verified')
 
-    if (r === 'ADMIN' || r === 'INTERVIEWER' || r === 'CANDIDATE') setSelectedRole(r)
-    if (em) setEmailOrUsername(em)
-    // After registration the page arrives with registered=true; jump to OTP step
-    if (registered === 'true' && em && (r === 'CANDIDATE' || r === 'INTERVIEWER')) {
-      setVerifiedEmail(em.toLowerCase())
-      setStage('otp')
-      setResendCooldown(60)
-      setSuccessMsg('Account created! A 6-digit code was sent to your email.')
+    if (emailParam) {
+      setUsernameOrEmail(emailParam)
+    }
+    if (resetParam === 'true') {
+      setSuccessMsg('Password has been reset successfully. Please sign in with your new password.')
+    } else if (verifiedParam === 'true') {
+      setSuccessMsg('Email verified successfully! You can now sign in.')
     }
   }, [])
 
-  // ── Cooldown timer ──────────────────────────────────────────────────────────
-  useEffect(() => {
-    if (resendCooldown <= 0) return
-    const t = setInterval(() => setResendCooldown((p) => p - 1), 1000)
-    return () => clearInterval(t)
-  }, [resendCooldown])
-
-  // ── Reset to role-select ────────────────────────────────────────────────────
-  const resetAll = () => {
-    setSelectedRole(null)
-    setStage('role-select')
-    setError('')
-    setSuccessMsg('')
-    setOtpDigits(['', '', '', '', '', ''])
-    setVerifiedEmail('')
-    setLoginPassword('')
-    setShowLoginPassword(false)
-  }
-
-  // ── Derived OTP string ──────────────────────────────────────────────────────
-  const otpString = otpDigits.join('')
-
-  // ── ADMIN login ─────────────────────────────────────────────────────────────
-  const handleAdminLogin = async (e: React.FormEvent) => {
+  // Standard Login Submission
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
     setSuccessMsg('')
-    setIsLoading(true)
-    try {
-      const res = await fetch('/api/auth/login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: adminUsername, password: adminPassword }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Failed to sign in')
-      router.push(data.redirect || '/admin')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Invalid credentials.')
-    } finally {
-      setIsLoading(false)
+
+    const trimmedInput = usernameOrEmail.trim()
+    if (!trimmedInput) {
+      setError('Please enter your username or email address.')
+      return
     }
-  }
+    if (!password) {
+      setError('Please enter your password.')
+      return
+    }
 
-  // ── C/I password verify ─────────────────────────────────────────────────────
-  const handlePasswordLogin = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setError('')
-    setSuccessMsg('')
-    if (!emailOrUsername.trim()) { setError('Please enter your email or username.'); return }
-    if (!loginPassword) { setError('Please enter your password.'); return }
     setIsLoading(true)
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ username: emailOrUsername.trim(), password: loginPassword }),
+        body: JSON.stringify({ username: trimmedInput, password }),
       })
+
       const data = await res.json()
 
+      // Handle legacy accounts without password
       if (res.status === 403 && data.requiresPasswordSetup) {
-        // Legacy passwordless account — move to set-password stage
-        setSetPasswordEmail(data.email || emailOrUsername.trim().toLowerCase())
-        setStage('set-password')
+        setLegacyEmail(data.email || trimmedInput)
+        setRequiresPasswordSetup(true)
         setError('')
         return
       }
 
-      if (!res.ok) throw new Error(data.error || 'Sign in failed')
-
-      if (data.otpRequired) {
-        setVerifiedEmail(data.email)
-        setStage('otp')
-        setResendCooldown(60)
-        setSuccessMsg(data.message || 'Code sent to your email.')
-        setOtpDigits(['', '', '', '', '', ''])
+      if (!res.ok) {
+        throw new Error(data.error || 'Invalid username/email or password.')
       }
+
+      // Successful login with automatic server-determined role redirect
+      setSuccessMsg('Sign in successful. Redirecting to workspace…')
+      const targetUrl = data.redirect || '/dashboard'
+      router.push(targetUrl)
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Invalid credentials.')
+      setError(err instanceof Error ? err.message : 'Invalid credentials. Please try again.')
     } finally {
       setIsLoading(false)
     }
   }
 
-  // ── Set-password (legacy accounts) ──────────────────────────────────────────
-  const handleSetPassword = async (e: React.FormEvent) => {
+  // Handle Legacy Account Password Setup
+  const handleSetupPassword = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
-    if (!newPassword) { setError('Please enter a new password.'); return }
-    if (newPassword !== confirmNewPassword) { setError('Passwords do not match.'); return }
+    setSuccessMsg('')
+
+    if (!newPassword) {
+      setError('Please enter a new password.')
+      return
+    }
+    if (newPassword.length < 8) {
+      setError('Password must be at least 8 characters long.')
+      return
+    }
+    if (!/[0-9!@#$%^&*()_+\-=\[\]{}|;:,.<>?]/.test(newPassword)) {
+      setError('Password must contain at least one number or special character.')
+      return
+    }
+    if (newPassword !== confirmNewPassword) {
+      setError('Passwords do not match.')
+      return
+    }
+
     setIsLoading(true)
     try {
       const res = await fetch('/api/auth/set-password', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          email: setPasswordEmail,
+          email: legacyEmail,
           newPassword,
-          role: selectedRole,
+          role: 'INTERVIEWER', // default fallback for legacy
         }),
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Failed to set password')
 
-      setVerifiedEmail(data.email || setPasswordEmail)
-      setStage('otp')
-      setResendCooldown(60)
-      setSuccessMsg(data.message || 'Password set! Check your email for the verification code.')
-      setOtpDigits(['', '', '', '', '', ''])
+      const data = await res.json()
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to setup password.')
+      }
+
+      setRequiresPasswordSetup(false)
+      setPassword(newPassword)
+      setSuccessMsg('Password configured! Please sign in using your new password.')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to set password.')
+      setError(err instanceof Error ? err.message : 'Failed to setup password.')
     } finally {
       setIsLoading(false)
     }
   }
-
-  // ── Resend OTP ───────────────────────────────────────────────────────────────
-  const handleResendOtp = useCallback(async () => {
-    if (resendCooldown > 0 || isLoading) return
-    setError('')
-    setIsLoading(true)
-    try {
-      const res = await fetch('/api/auth/request-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: verifiedEmail, role: selectedRole }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Failed to resend code')
-      setResendCooldown(60)
-      setSuccessMsg('A new verification code has been sent.')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to resend code.')
-    } finally {
-      setIsLoading(false)
-    }
-  }, [verifiedEmail, selectedRole, resendCooldown, isLoading])
-
-  // ── Verify OTP ───────────────────────────────────────────────────────────────
-  const handleVerifyOtp = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (otpString.length !== 6) { setError('Please enter all 6 digits.'); return }
-    setError('')
-    setSuccessMsg('')
-    setIsLoading(true)
-    try {
-      const res = await fetch('/api/auth/verify-otp', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email: verifiedEmail, role: selectedRole, otp: otpString }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Verification failed')
-      router.push(data.redirect || (selectedRole === 'CANDIDATE' ? '/candidate' : '/dashboard'))
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Invalid code. Please try again.')
-    } finally {
-      setIsLoading(false)
-    }
-  }
-
-  // ── Role colours ─────────────────────────────────────────────────────────────
-  const roleGradient =
-    selectedRole === 'CANDIDATE'
-      ? 'linear-gradient(135deg, #059669, #10b981)'
-      : 'linear-gradient(135deg, #6366f1, #8b5cf6)'
-
-  const badgeStyle: React.CSSProperties =
-    selectedRole === 'CANDIDATE'
-      ? { background: 'rgba(16,185,129,0.15)', color: '#10b981' }
-      : selectedRole === 'INTERVIEWER'
-      ? { background: 'rgba(99,102,241,0.15)', color: '#818cf8' }
-      : { background: 'rgba(255,255,255,0.08)', color: '#94a3b8' }
-
-  // Stage header text
-  const stageTitle =
-    stage === 'role-select'
-      ? 'Sign in to your workspace'
-      : stage === 'password'
-      ? selectedRole === 'ADMIN'
-        ? 'Administrator Portal'
-        : 'Sign In'
-      : stage === 'set-password'
-      ? 'Set Your Password'
-      : 'Verify Your Email'
-
-  const stageSubtitle =
-    stage === 'role-select'
-      ? 'Choose your account type to continue'
-      : stage === 'password' && selectedRole === 'ADMIN'
-      ? 'Secure administrator access'
-      : stage === 'password'
-      ? `${selectedRole === 'CANDIDATE' ? 'Candidate' : 'Interviewer'} — Step 1 of 2`
-      : stage === 'set-password'
-      ? 'Your account needs a password before you can sign in'
-      : `${selectedRole === 'CANDIDATE' ? 'Candidate' : 'Interviewer'} — Step 2 of 2`
 
   return (
     <div className="auth-page-bg">
@@ -332,312 +153,127 @@ export default function LoginPage() {
           {/* Header */}
           <div style={{ textAlign: 'center', marginBottom: '1.75rem' }}>
             <div style={{ display: 'flex', justifyContent: 'center', marginBottom: '0.9rem' }}>
-              <div style={{
-                background: 'rgba(99,102,241,0.1)',
-                border: '1px solid rgba(99,102,241,0.2)',
-                color: '#818cf8',
-                width: '48px',
-                height: '48px',
-                borderRadius: '12px',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}>
+              <div
+                style={{
+                  background: 'rgba(99,102,241,0.1)',
+                  border: '1px solid rgba(99,102,241,0.2)',
+                  color: '#818cf8',
+                  width: '48px',
+                  height: '48px',
+                  borderRadius: '12px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                }}
+              >
                 <Icon name="memory" size={24} />
               </div>
             </div>
-            <h1 style={{ fontSize: '1.4rem', fontWeight: 700, color: 'var(--color-text-primary)', margin: '0 0 0.35rem 0' }}>
+            <h1
+              style={{
+                fontSize: '1.4rem',
+                fontWeight: 700,
+                color: 'var(--color-text-primary)',
+                margin: '0 0 0.35rem 0',
+              }}
+            >
               SmartInterview AI
             </h1>
             <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem', margin: 0 }}>
-              {stageTitle}
+              {requiresPasswordSetup ? 'Setup Account Password' : 'Sign In to Your Workspace'}
             </p>
-            {stage !== 'role-select' && (
-              <p style={{ color: 'var(--color-text-muted)', fontSize: '0.78rem', margin: '0.3rem 0 0 0' }}>
-                {stageSubtitle}
-              </p>
-            )}
           </div>
 
-          {/* Progress indicator for C/I */}
-          {(selectedRole === 'CANDIDATE' || selectedRole === 'INTERVIEWER') && stage !== 'role-select' && stage !== 'set-password' && (
-            <div style={{ display: 'flex', gap: '6px', marginBottom: '1.5rem' }}>
-              {(['password', 'otp'] as Stage[]).map((s, i) => (
-                <div
-                  key={s}
-                  style={{
-                    flex: 1,
-                    height: '3px',
-                    borderRadius: '99px',
-                    background: stage === 'otp' || (i === 0)
-                      ? (i === 0 ? '#6366f1' : stage === 'otp' ? '#6366f1' : 'var(--color-card-border)')
-                      : 'var(--color-card-border)',
-                    transition: 'background 0.3s',
-                  }}
-                />
-              ))}
-            </div>
-          )}
-
-          {/* Error / success banners */}
+          {/* Feedback banners */}
           {error && (
-            <div className="auth-alert auth-alert-error">
+            <div className="auth-alert auth-alert-error" role="alert">
               <Icon name="error" size={16} style={{ flexShrink: 0, marginTop: '1px' }} />
               <span>{error}</span>
             </div>
           )}
           {successMsg && (
-            <div className="auth-alert auth-alert-success">
+            <div className="auth-alert auth-alert-success" role="status">
               <Icon name="check_circle" size={16} style={{ flexShrink: 0, marginTop: '1px' }} />
               <span>{successMsg}</span>
             </div>
           )}
 
-          {/* ── STAGE: role-select ── */}
-          {stage === 'role-select' && (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.85rem' }}>
-              <button
-                onClick={() => { setSelectedRole('ADMIN'); setStage('password') }}
-                style={{
-                  width: '100%',
-                  background: 'var(--color-bg-tertiary)',
-                  border: '1px solid var(--color-card-border)',
-                  color: 'var(--color-text-primary)',
-                  padding: '0.9rem',
-                  borderRadius: '10px',
-                  fontSize: '0.95rem',
-                  fontWeight: 500,
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '0.6rem',
-                }}
-              >
-                <Icon name="shield" size={18} /> Login as Admin
-              </button>
-
-              <button
-                onClick={() => { setSelectedRole('INTERVIEWER'); setStage('password') }}
-                style={{
-                  width: '100%',
-                  background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
-                  border: 'none',
-                  color: '#ffffff',
-                  padding: '0.9rem',
-                  borderRadius: '10px',
-                  fontSize: '0.95rem',
-                  fontWeight: 500,
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '0.6rem',
-                  boxShadow: '0 4px 14px rgba(99,102,241,0.3)',
-                }}
-              >
-                <Icon name="co_present" size={18} /> Login as Interviewer
-              </button>
-
-              <button
-                onClick={() => { setSelectedRole('CANDIDATE'); setStage('password') }}
-                style={{
-                  width: '100%',
-                  background: 'linear-gradient(135deg, #059669, #10b981)',
-                  border: 'none',
-                  color: '#ffffff',
-                  padding: '0.9rem',
-                  borderRadius: '10px',
-                  fontSize: '0.95rem',
-                  fontWeight: 500,
-                  cursor: 'pointer',
-                  display: 'flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  gap: '0.6rem',
-                  boxShadow: '0 4px 14px rgba(16,185,129,0.25)',
-                }}
-              >
-                <Icon name="person" size={18} /> Login as Candidate
-              </button>
-            </div>
-          )}
-
-          {/* ── STAGE: password (Admin) ── */}
-          {stage === 'password' && selectedRole === 'ADMIN' && (
+          {/* Legacy Account Password Setup View */}
+          {requiresPasswordSetup ? (
             <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
-                <button className="auth-back-btn" onClick={resetAll}>
-                  <Icon name="arrow_back" size={16} /> Change Role
-                </button>
-                <span className="auth-role-badge" style={{ background: 'rgba(255,255,255,0.08)', color: '#94a3b8' }}>
-                  Admin
-                </span>
-              </div>
-
-              <form onSubmit={handleAdminLogin} style={{ display: 'flex', flexDirection: 'column', gap: '1.1rem' }}>
-                <div>
-                  <label htmlFor="admin-user" style={{ display: 'block', fontSize: '0.85rem', color: 'var(--color-text-secondary)', marginBottom: '0.45rem', fontWeight: 500 }}>
-                    Admin Username
-                  </label>
-                  <input
-                    id="admin-user"
-                    type="text"
-                    className="auth-input"
-                    value={adminUsername}
-                    onChange={(e) => setAdminUsername(e.target.value)}
-                    placeholder="Enter admin username"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="admin-pass" style={{ display: 'block', fontSize: '0.85rem', color: 'var(--color-text-secondary)', marginBottom: '0.45rem', fontWeight: 500 }}>
-                    Password
-                  </label>
-                  <div style={{ position: 'relative' }}>
-                    <input
-                      id="admin-pass"
-                      type={showAdminPassword ? 'text' : 'password'}
-                      className="auth-input auth-input-password"
-                      value={adminPassword}
-                      onChange={(e) => setAdminPassword(e.target.value)}
-                      placeholder="Enter admin password"
-                      required
-                    />
-                    <button type="button" className="auth-vis-toggle" onClick={() => setShowAdminPassword(!showAdminPassword)}>
-                      <Icon name={showAdminPassword ? 'visibility_off' : 'visibility'} size={18} />
-                    </button>
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={isLoading}
-                  className="auth-submit-btn"
-                  style={{ marginTop: '0.4rem', background: 'linear-gradient(135deg, #475569, #334155)' }}
-                >
-                  {isLoading ? 'Signing in…' : 'Sign In as Admin'}
-                </button>
-              </form>
-            </div>
-          )}
-
-          {/* ── STAGE: password (Interviewer / Candidate) ── */}
-          {stage === 'password' && (selectedRole === 'INTERVIEWER' || selectedRole === 'CANDIDATE') && (
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
-                <button className="auth-back-btn" onClick={resetAll}>
-                  <Icon name="arrow_back" size={16} /> Change Role
-                </button>
-                <span className="auth-role-badge" style={badgeStyle}>
-                  {selectedRole === 'CANDIDATE' ? 'Candidate' : 'Interviewer'}
-                </span>
-              </div>
-
-              <form onSubmit={handlePasswordLogin} style={{ display: 'flex', flexDirection: 'column', gap: '1.1rem' }}>
-                <div>
-                  <label htmlFor="login-email" style={{ display: 'block', fontSize: '0.85rem', color: 'var(--color-text-secondary)', marginBottom: '0.45rem', fontWeight: 500 }}>
-                    Email / Username
-                  </label>
-                  <input
-                    id="login-email"
-                    type="text"
-                    className="auth-input"
-                    value={emailOrUsername}
-                    onChange={(e) => setEmailOrUsername(e.target.value)}
-                    placeholder="e.g., user@example.com"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="login-pass" style={{ display: 'block', fontSize: '0.85rem', color: 'var(--color-text-secondary)', marginBottom: '0.45rem', fontWeight: 500 }}>
-                    Password
-                  </label>
-                  <div style={{ position: 'relative' }}>
-                    <input
-                      id="login-pass"
-                      type={showLoginPassword ? 'text' : 'password'}
-                      className="auth-input auth-input-password"
-                      value={loginPassword}
-                      onChange={(e) => setLoginPassword(e.target.value)}
-                      placeholder="Enter your password"
-                      required
-                    />
-                    <button type="button" className="auth-vis-toggle" onClick={() => setShowLoginPassword(!showLoginPassword)}>
-                      <Icon name={showLoginPassword ? 'visibility_off' : 'visibility'} size={18} />
-                    </button>
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={isLoading}
-                  className="auth-submit-btn"
-                  style={{ marginTop: '0.4rem', background: roleGradient }}
-                >
-                  {isLoading ? 'Verifying password…' : 'Continue →'}
-                </button>
-              </form>
-            </div>
-          )}
-
-          {/* ── STAGE: set-password (legacy null-password accounts) ── */}
-          {stage === 'set-password' && (
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
-                <button className="auth-back-btn" onClick={() => { setStage('password'); setError(''); setSuccessMsg('') }}>
-                  <Icon name="arrow_back" size={16} /> Back
-                </button>
-                <span className="auth-role-badge" style={badgeStyle}>
-                  {selectedRole === 'CANDIDATE' ? 'Candidate' : 'Interviewer'}
-                </span>
-              </div>
-
               <div className="auth-alert auth-alert-info" style={{ marginBottom: '1.25rem' }}>
                 <Icon name="info" size={16} style={{ flexShrink: 0, marginTop: '1px' }} />
                 <div>
-                  Your account (<strong style={{ wordBreak: 'break-all' }}>{setPasswordEmail}</strong>) was created without a password. Set one now to activate two-step login.
+                  Your account (<strong style={{ wordBreak: 'break-all' }}>{legacyEmail}</strong>) does not have a password yet. Please create a password to continue.
                 </div>
               </div>
 
-              <form onSubmit={handleSetPassword} style={{ display: 'flex', flexDirection: 'column', gap: '1.1rem' }}>
+              <form onSubmit={handleSetupPassword} style={{ display: 'flex', flexDirection: 'column', gap: '1.1rem' }}>
                 <div>
-                  <label htmlFor="new-pass" style={{ display: 'block', fontSize: '0.85rem', color: 'var(--color-text-secondary)', marginBottom: '0.45rem', fontWeight: 500 }}>
+                  <label
+                    htmlFor="legacy-new-pass"
+                    style={{
+                      display: 'block',
+                      fontSize: '0.85rem',
+                      color: 'var(--color-text-secondary)',
+                      marginBottom: '0.45rem',
+                      fontWeight: 500,
+                    }}
+                  >
                     New Password
                   </label>
                   <div style={{ position: 'relative' }}>
                     <input
-                      id="new-pass"
+                      id="legacy-new-pass"
                       type={showNewPassword ? 'text' : 'password'}
                       className="auth-input auth-input-password"
                       value={newPassword}
                       onChange={(e) => setNewPassword(e.target.value)}
-                      placeholder="Min 8 chars, include a number or symbol"
+                      placeholder="Min 8 chars, 1 number or symbol"
                       required
+                      disabled={isLoading}
                     />
-                    <button type="button" className="auth-vis-toggle" onClick={() => setShowNewPassword(!showNewPassword)}>
+                    <button
+                      type="button"
+                      className="auth-vis-toggle"
+                      onClick={() => setShowNewPassword(!showNewPassword)}
+                      aria-label={showNewPassword ? 'Hide password' : 'Show password'}
+                    >
                       <Icon name={showNewPassword ? 'visibility_off' : 'visibility'} size={18} />
                     </button>
                   </div>
                 </div>
 
                 <div>
-                  <label htmlFor="confirm-new-pass" style={{ display: 'block', fontSize: '0.85rem', color: 'var(--color-text-secondary)', marginBottom: '0.45rem', fontWeight: 500 }}>
+                  <label
+                    htmlFor="legacy-confirm-pass"
+                    style={{
+                      display: 'block',
+                      fontSize: '0.85rem',
+                      color: 'var(--color-text-secondary)',
+                      marginBottom: '0.45rem',
+                      fontWeight: 500,
+                    }}
+                  >
                     Confirm Password
                   </label>
                   <div style={{ position: 'relative' }}>
                     <input
-                      id="confirm-new-pass"
+                      id="legacy-confirm-pass"
                       type={showConfirmNewPassword ? 'text' : 'password'}
                       className="auth-input auth-input-password"
                       value={confirmNewPassword}
                       onChange={(e) => setConfirmNewPassword(e.target.value)}
                       placeholder="Repeat your new password"
                       required
+                      disabled={isLoading}
                     />
-                    <button type="button" className="auth-vis-toggle" onClick={() => setShowConfirmNewPassword(!showConfirmNewPassword)}>
+                    <button
+                      type="button"
+                      className="auth-vis-toggle"
+                      onClick={() => setShowConfirmNewPassword(!showConfirmNewPassword)}
+                      aria-label={showConfirmNewPassword ? 'Hide password' : 'Show password'}
+                    >
                       <Icon name={showConfirmNewPassword ? 'visibility_off' : 'visibility'} size={18} />
                     </button>
                   </div>
@@ -647,86 +283,130 @@ export default function LoginPage() {
                   type="submit"
                   disabled={isLoading}
                   className="auth-submit-btn"
-                  style={{ marginTop: '0.4rem', background: roleGradient }}
-                >
-                  {isLoading ? 'Setting password…' : 'Set Password & Continue →'}
-                </button>
-              </form>
-            </div>
-          )}
-
-          {/* ── STAGE: otp ── */}
-          {stage === 'otp' && (
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
-                <button
-                  className="auth-back-btn"
-                  onClick={() => {
-                    setStage('password')
-                    setOtpDigits(['', '', '', '', '', ''])
-                    setError('')
-                    setSuccessMsg('')
+                  style={{
+                    marginTop: '0.4rem',
+                    background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                    color: '#ffffff',
+                    cursor: isLoading ? 'not-allowed' : 'pointer',
                   }}
                 >
-                  <Icon name="arrow_back" size={16} /> Back
-                </button>
-                <span className="auth-role-badge" style={badgeStyle}>
-                  {selectedRole === 'CANDIDATE' ? 'Candidate OTP' : 'Interviewer OTP'}
-                </span>
-              </div>
-
-              <div className="auth-alert auth-alert-info" style={{ marginBottom: '1.5rem', alignItems: 'center' }}>
-                <Icon name="mark_email_read" size={18} style={{ flexShrink: 0 }} />
-                <div>
-                  A 6-digit code was sent to{' '}
-                  <strong style={{ wordBreak: 'break-all' }}>{verifiedEmail}</strong>
-                </div>
-              </div>
-
-              <form onSubmit={handleVerifyOtp} style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-                <div>
-                  <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--color-text-secondary)', marginBottom: '0.75rem', fontWeight: 500, textAlign: 'center' }}>
-                    Enter verification code
-                  </label>
-                  <OtpInput value={otpDigits} onChange={setOtpDigits} />
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={isLoading || otpString.length !== 6}
-                  className="auth-submit-btn"
-                  style={{ background: roleGradient }}
-                >
-                  {isLoading ? 'Verifying…' : 'Verify & Sign In'}
+                  {isLoading ? 'Setting password…' : 'Set Password'}
                 </button>
 
-                {/* Resend */}
-                <div style={{ textAlign: 'center', fontSize: '0.82rem', color: 'var(--color-text-muted)' }}>
-                  {resendCooldown > 0 ? (
-                    <span>Resend code in <strong style={{ color: 'var(--color-text-secondary)' }}>{resendCooldown}s</strong></span>
-                  ) : (
-                    <button
-                      type="button"
-                      onClick={handleResendOtp}
-                      disabled={isLoading}
-                      style={{ background: 'none', border: 'none', color: '#818cf8', fontWeight: 500, fontSize: '0.82rem', cursor: 'pointer', padding: 0 }}
-                    >
-                      Resend Code
-                    </button>
-                  )}
+                <div style={{ textAlign: 'center', marginTop: '0.5rem' }}>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setRequiresPasswordSetup(false)
+                      setError('')
+                    }}
+                    className="auth-back-btn"
+                    style={{ margin: '0 auto', fontSize: '0.82rem' }}
+                  >
+                    <Icon name="arrow_back" size={14} /> Back to Sign In
+                  </button>
                 </div>
               </form>
             </div>
-          )}
+          ) : (
+            /* Standard Login Form — No Role Selector */
+            <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '1.15rem' }}>
+              <div>
+                <label
+                  htmlFor="username-or-email"
+                  style={{
+                    display: 'block',
+                    fontSize: '0.85rem',
+                    color: 'var(--color-text-secondary)',
+                    marginBottom: '0.45rem',
+                    fontWeight: 500,
+                  }}
+                >
+                  Username or Email
+                </label>
+                <input
+                  id="username-or-email"
+                  type="text"
+                  autoComplete="username"
+                  className="auth-input"
+                  value={usernameOrEmail}
+                  onChange={(e) => setUsernameOrEmail(e.target.value)}
+                  placeholder="Enter username or email"
+                  required
+                  disabled={isLoading}
+                />
+              </div>
 
-          {/* Register link */}
-          {(stage === 'role-select' || ((stage === 'password') && selectedRole !== 'ADMIN')) && (
-            <div style={{ marginTop: '1.75rem', textAlign: 'center', fontSize: '0.85rem', color: 'var(--color-text-muted)' }}>
-              <span>Don&apos;t have an account? </span>
-              <Link href="/register" style={{ color: '#818cf8', textDecoration: 'none', fontWeight: 500 }}>
-                Create Account
-              </Link>
-            </div>
+              <div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.45rem' }}>
+                  <label
+                    htmlFor="login-password"
+                    style={{
+                      fontSize: '0.85rem',
+                      color: 'var(--color-text-secondary)',
+                      fontWeight: 500,
+                    }}
+                  >
+                    Password
+                  </label>
+                  <Link
+                    href="/forgot-password"
+                    style={{
+                      fontSize: '0.8rem',
+                      color: '#818cf8',
+                      textDecoration: 'none',
+                      fontWeight: 500,
+                    }}
+                  >
+                    Forgot Password?
+                  </Link>
+                </div>
+                <div style={{ position: 'relative' }}>
+                  <input
+                    id="login-password"
+                    type={showPassword ? 'text' : 'password'}
+                    autoComplete="current-password"
+                    className="auth-input auth-input-password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="Enter your password"
+                    required
+                    disabled={isLoading}
+                  />
+                  <button
+                    type="button"
+                    className="auth-vis-toggle"
+                    onClick={() => setShowPassword(!showPassword)}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  >
+                    <Icon name={showPassword ? 'visibility_off' : 'visibility'} size={18} />
+                  </button>
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={isLoading}
+                className="auth-submit-btn"
+                style={{
+                  marginTop: '0.4rem',
+                  background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                  color: '#ffffff',
+                  boxShadow: '0 4px 14px rgba(99,102,241,0.3)',
+                  cursor: isLoading ? 'not-allowed' : 'pointer',
+                  opacity: isLoading ? 0.7 : 1,
+                }}
+              >
+                {isLoading ? 'Signing In…' : 'Sign In'}
+              </button>
+
+              <div style={{ marginTop: '1.25rem', textAlign: 'center', fontSize: '0.85rem', color: 'var(--color-text-muted)' }}>
+                <span>Don&apos;t have an account? </span>
+                <Link href="/register" style={{ color: '#818cf8', textDecoration: 'none', fontWeight: 500 }}>
+                  Create Account
+                </Link>
+              </div>
+            </form>
           )}
         </div>
       </div>

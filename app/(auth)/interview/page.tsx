@@ -1,6 +1,5 @@
 "use client";
 
-import { useFallbackFetch } from "@/components/providers/FallbackProvider";
 import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Icon from '@/components/Icon';
@@ -60,7 +59,6 @@ interface DocumentData {
 }
 
 export default function InterviewPage() {
-  const fetchWithFallback = useFallbackFetch();
   const router = useRouter();
 
   const [userRole, setUserRole] = useState<string | null>(null);
@@ -74,7 +72,6 @@ export default function InterviewPage() {
   const [difficulty, setDifficulty] = useState('intermediate');
   const [setupMode, setSetupMode] = useState('standard');
   const [setupData, setSetupData] = useState('');
-  const [selectedLLM, setSelectedLLM] = useState('gemini');
 
   // Documents state
   const [documents, setDocuments] = useState<DocumentData[]>([]);
@@ -192,7 +189,6 @@ export default function InterviewPage() {
 
           const scope = data.session?.scope || {};
           if (scope.mode) setSetupMode(scope.mode);
-          if (scope.llmProvider) setSelectedLLM(scope.llmProvider);
           if (Array.isArray(scope.selectedDocumentIds)) setSelectedDocIds(scope.selectedDocumentIds);
           if (data.session?.difficulty) setDifficulty(data.session.difficulty);
 
@@ -235,7 +231,7 @@ export default function InterviewPage() {
     }
 
     try {
-      const res = await fetchWithFallback("/api/interview/start", {
+      const res = await fetch("/api/interview/start", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -244,8 +240,7 @@ export default function InterviewPage() {
           difficulty: difficulty,
           mode: setupMode,
           setupData: finalSetupData,
-          selectedDocumentIds: selectedDocIds,
-          forceProvider: selectedLLM
+          selectedDocumentIds: selectedDocIds
         })
       });
 
@@ -284,14 +279,13 @@ export default function InterviewPage() {
     setIsProcessing(true);
 
     try {
-      const evalRes = await fetchWithFallback("/api/interview/evaluate", {
+      const evalRes = await fetch("/api/interview/evaluate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           sessionId: session.id,
           questionId: currentQuestion?.id,
-          transcript: textAnswer,
-          forceProvider: selectedLLM
+          transcript: textAnswer
         })
       });
 
@@ -332,7 +326,7 @@ export default function InterviewPage() {
   const selectNextQuestion = async (suggestion: SuggestionData) => {
     setIsProcessing(true);
     try {
-      const res = await fetchWithFallback("/api/interview/select-question", {
+      const res = await fetch("/api/interview/select-question", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -363,10 +357,10 @@ export default function InterviewPage() {
     }
     setIsProcessing(true);
     try {
-      const res = await fetchWithFallback("/api/interview/end", {
+      const res = await fetch("/api/interview/end", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId: session.id, forceProvider: selectedLLM })
+        body: JSON.stringify({ sessionId: session.id })
       });
       const data = await res.json();
       localStorage.removeItem('activeInterviewSession');
@@ -449,55 +443,46 @@ export default function InterviewPage() {
       };
 
       mediaRecorder.onstop = async () => {
-        if (timerRef.current) {
-          clearInterval(timerRef.current);
-          timerRef.current = null;
-        }
+        clearInterval(timerRef.current as NodeJS.Timeout);
+        setRecordingDuration(0);
+        setIsRecording(false);
+        stream.getTracks().forEach((track) => track.stop());
+
         if (speechRecognizerRef.current) {
-          try { speechRecognizerRef.current.stop(); } catch {}
+          try {
+            speechRecognizerRef.current.stop();
+          } catch {}
           speechRecognizerRef.current = null;
         }
 
-        const actualMime = mediaRecorder.mimeType || mimeType || 'audio/webm';
-        const audioBlob = new Blob(chunksRef.current, { type: actualMime });
-        stream.getTracks().forEach(track => track.stop());
-
-        if (audioBlob.size === 0) {
-          setIsRecording(false);
-          setRecordingDuration(0);
+        if (liveSpeechCaptured && textAnswer.trim().length > 0) {
           return;
         }
 
-        setIsRecording(false);
+        const audioBlob = new Blob(chunksRef.current, { type: mimeType || 'audio/webm' });
+        if (audioBlob.size < 1000) return;
+
         setIsTranscribing(true);
-        setIsProcessing(true);
-
         try {
-          const ext = actualMime.includes('mp4') ? 'mp4' : actualMime.includes('ogg') ? 'ogg' : 'webm';
           const formData = new FormData();
-          formData.append("audio", audioBlob, `candidate_answer.${ext}`);
+          formData.append('audio', audioBlob, 'recording.webm');
 
-          const res = await fetch("/api/interview/transcribe", {
-            method: "POST",
+          const response = await fetch('/api/interview/transcribe', {
+            method: 'POST',
             body: formData,
           });
-          const data = await res.json();
 
-          if (!res.ok) {
-            if (!liveSpeechCaptured) setMicError(data.error || "Transcription failed. Type answer manually.");
-          } else if (data.text || data.transcript) {
-            const transcript = (data.text || data.transcript).trim();
-            if (transcript && !liveSpeechCaptured) {
-              setTextAnswer(prev => prev.trim() ? `${prev.trim()} ${transcript}` : transcript);
-            }
+          const data = await response.json();
+          if (data.transcript && data.transcript.trim()) {
+            setTextAnswer((prev) => {
+              const base = prev ? prev.trim() + ' ' : '';
+              return base + data.transcript.trim();
+            });
           }
-        } catch (error) {
-          console.error("Transcription error:", error);
-          if (!liveSpeechCaptured) setMicError("Whisper STT service unavailable. Type candidate answer manually.");
+        } catch (err) {
+          console.error("Transcription error:", err);
         } finally {
           setIsTranscribing(false);
-          setIsProcessing(false);
-          setRecordingDuration(0);
         }
       };
 
@@ -506,30 +491,15 @@ export default function InterviewPage() {
       setRecordingDuration(0);
 
       timerRef.current = setInterval(() => {
-        setRecordingDuration(prev => {
-          if (prev >= 119) {
-            stopRecording();
-            return 120;
-          }
-          return prev + 1;
-        });
+        setRecordingDuration((prev) => prev + 1);
       }, 1000);
     } catch (err) {
-      console.error("Mic access error:", err);
-      setMicError("Unable to access microphone. Please type answer manually.");
-      setIsRecording(false);
+      console.error("Microphone access failed:", err);
+      setMicError("Microphone permission denied or device not found.");
     }
   };
 
   const stopRecording = () => {
-    if (timerRef.current) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
-    if (speechRecognizerRef.current) {
-      try { speechRecognizerRef.current.stop(); } catch {}
-      speechRecognizerRef.current = null;
-    }
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
     }
@@ -537,17 +507,21 @@ export default function InterviewPage() {
 
   if (isResuming) {
     return (
-      <div style={{ padding: '4rem 2rem', display: 'flex', justifyContent: 'center', alignItems: 'center', height: '100%' }}>
-        <h2 style={{ color: 'var(--color-text-muted)' }}>Restoring Interviewer Session...</h2>
+      <div className="zentra-page-container">
+        <div className="zentra-card" style={{ padding: '4rem', textAlign: 'center', color: 'var(--zentra-text-muted)' }}>
+          <Icon name="sync" size={32} style={{ marginBottom: '0.75rem', color: '#2563eb' }} />
+          <div>Checking for active interview sessions...</div>
+        </div>
       </div>
     );
   }
 
-  // CANDIDATE REDIRECT GUARD
   if (userRole === 'CANDIDATE') {
     return (
-      <div style={{ padding: '4rem 2rem', textAlign: 'center', color: 'var(--color-text-primary)' }}>
-        <h2>Redirecting to Candidate Dashboard...</h2>
+      <div className="zentra-page-container">
+        <div className="zentra-card" style={{ padding: '4rem', textAlign: 'center' }}>
+          <h2>Redirecting to Candidate Results Portal...</h2>
+        </div>
       </div>
     );
   }
@@ -557,66 +531,88 @@ export default function InterviewPage() {
     : 0;
 
   return (
-    <div className="interview-page-wrapper" style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      {/* Header */}
-      <div className="interview-header" style={{ padding: '1.25rem 2rem', borderBottom: '1px solid var(--color-card-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexShrink: 0, flexWrap: 'wrap', gap: '1rem', background: 'var(--color-card-bg)' }}>
-        <div>
-          <h1 style={{ margin: 0, color: 'var(--color-text-primary)', fontSize: '1.4rem', fontWeight: 700 }}>
-            {session ? `Live Interview: ${session.candidateName || 'Candidate'}` : 'Live Interviewer Workspace'}
-          </h1>
-          <p style={{ margin: '0.2rem 0 0 0', color: 'var(--color-text-secondary)', fontSize: '0.85rem' }}>
-            {session ? `Mode: ${setupMode}` : 'Interviewer conducts the live candidate evaluation session.'}
-          </p>
+    <div style={{ display: 'flex', flexDirection: 'column', minHeight: 'calc(100vh - 72px - 40px)', background: 'var(--zentra-bg-canvas)' }}>
+      {/* Top Header Row */}
+      <div style={{
+        padding: '1.25rem 2rem',
+        background: 'var(--zentra-bg-surface)',
+        borderBottom: '1px solid var(--zentra-border)',
+        display: 'flex',
+        justifyContent: 'space-between',
+        alignItems: 'center',
+        flexWrap: 'wrap',
+        gap: '1rem',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+          <div style={{
+            width: '36px',
+            height: '36px',
+            borderRadius: '10px',
+            background: session ? 'rgba(16, 185, 129, 0.12)' : 'rgba(37, 99, 235, 0.1)',
+            color: session ? '#059669' : '#2563eb',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}>
+            <Icon name={session ? 'mic' : 'settings_suggest'} size={20} />
+          </div>
+          <div>
+            <h1 style={{ margin: 0, color: 'var(--zentra-text-primary)', fontSize: '1.35rem', fontWeight: 700, letterSpacing: '-0.02em' }}>
+              {session ? `Live Interview: ${session.candidateName || 'Candidate'}` : 'Live Interviewer Workspace'}
+            </h1>
+            <p style={{ margin: '0.15rem 0 0 0', color: 'var(--zentra-text-muted)', fontSize: '0.825rem' }}>
+              {session ? `Mode: ${setupMode}` : 'Configure and launch adaptive technical assessment.'}
+            </p>
+          </div>
         </div>
 
         {session && (
           <button
             onClick={endInterview}
             disabled={isProcessing}
-            style={{
-              padding: '0.65rem 1.25rem',
-              background: '#ef4444',
-              color: '#ffffff',
-              border: 'none',
-              borderRadius: '8px',
-              cursor: 'pointer',
-              fontWeight: 600,
-              fontSize: '0.875rem',
-              display: 'flex',
-              alignItems: 'center',
-              gap: '0.5rem'
-            }}
+            className="zentra-btn zentra-btn-danger"
           >
-            <Icon name="check_circle" size={18} />
-            {isProcessing ? 'Finalizing...' : 'End Interview & View Report'}
+            <Icon name="check_circle" size={16} />
+            <span>{isProcessing ? 'Finalizing...' : 'End Interview & View Report'}</span>
           </button>
         )}
       </div>
 
-      <div className="interview-layout-container" style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
-        {/* Main Content Area */}
-        <div className="interview-main-col" style={{ flex: 3, padding: '2rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
-
+      {/* Main Workspace Grid */}
+      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+        {/* Main Content Column */}
+        <div style={{ flex: 1, padding: '2rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
           {!session ? (
-            /* Interviewer Configuration Screen */
-            <div className="interview-config-card" style={{ background: 'var(--color-bg-tertiary)', border: '1px solid var(--color-card-border)', borderRadius: '16px', padding: '2.5rem', maxWidth: '720px', margin: '0 auto', width: '100%' }}>
+            /* Setup Configuration Card */
+            <div className="zentra-card" style={{ maxWidth: '760px', margin: '0 auto', width: '100%', padding: '2.5rem' }}>
               <div style={{ textAlign: 'center', marginBottom: '2rem' }}>
-                <div style={{ width: '60px', height: '60px', borderRadius: '50%', background: 'rgba(99,102,241,0.12)', border: '1px solid rgba(99,102,241,0.25)', color: '#818cf8', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 1rem auto' }}>
-                  <Icon name="settings_suggest" size={32} />
+                <div style={{
+                  width: '56px',
+                  height: '56px',
+                  borderRadius: '16px',
+                  background: 'rgba(37, 99, 235, 0.1)',
+                  color: '#2563eb',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  margin: '0 auto 1rem auto',
+                }}>
+                  <Icon name="tune" size={28} />
                 </div>
-                <h2 style={{ color: 'var(--color-text-primary)', margin: '0 0 0.5rem 0', fontSize: '1.5rem', fontWeight: 700 }}>Configure Live Interview</h2>
-                <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.9rem', margin: 0 }}>
-                  Set up candidate details, difficulty, interview mode, and Knowledge Base parameters.
+                <h2 style={{ color: 'var(--zentra-text-primary)', margin: '0 0 0.4rem 0', fontSize: '1.5rem', fontWeight: 700 }}>
+                  Configure Live Interview
+                </h2>
+                <p style={{ color: 'var(--zentra-text-secondary)', fontSize: '0.875rem', margin: 0 }}>
+                  Select a candidate, target difficulty level, and optional Knowledge Base documents.
                 </p>
               </div>
 
               <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-
-                {/* Candidate Selection */}
+                {/* Candidate Field */}
                 <div>
-                  <label style={{ display: 'block', color: 'var(--color-text-secondary)', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem' }}>Candidate</label>
+                  <label style={{ display: 'block', color: 'var(--zentra-text-secondary)', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.45rem' }}>Candidate</label>
                   {candidateList.length > 0 ? (
-                    <div style={{ display: 'flex', gap: '0.75rem' }}>
+                    <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
                       <select
                         value={selectedCandidateId}
                         onChange={(e) => {
@@ -624,9 +620,10 @@ export default function InterviewPage() {
                           const found = candidateList.find(c => c.id === e.target.value);
                           if (found) setCandidateNameInput(found.name);
                         }}
-                        style={{ flex: 1, padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--color-card-border)', background: 'var(--color-bg-secondary)', color: 'var(--color-text-primary)', fontSize: '0.9rem' }}
+                        className="zentra-select"
+                        style={{ flex: 1, minWidth: '220px' }}
                       >
-                        <option value="">-- Select Candidate --</option>
+                        <option value="">-- Choose Candidate --</option>
                         {candidateList.map(c => (
                           <option key={c.id} value={c.id}>{c.name} {c.email ? `(${c.email})` : ''}</option>
                         ))}
@@ -636,7 +633,8 @@ export default function InterviewPage() {
                         value={candidateNameInput}
                         onChange={(e) => { setCandidateNameInput(e.target.value); setSelectedCandidateId(''); }}
                         placeholder="Or enter candidate name..."
-                        style={{ flex: 1, padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--color-card-border)', background: 'var(--color-bg-secondary)', color: 'var(--color-text-primary)', fontSize: '0.9rem' }}
+                        className="zentra-input"
+                        style={{ flex: 1, minWidth: '200px' }}
                       />
                     </div>
                   ) : (
@@ -644,73 +642,87 @@ export default function InterviewPage() {
                       type="text"
                       value={candidateNameInput}
                       onChange={(e) => setCandidateNameInput(e.target.value)}
-                      placeholder="e.g. Mahanth18"
-                      style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--color-card-border)', background: 'var(--color-bg-secondary)', color: 'var(--color-text-primary)', fontSize: '0.9rem' }}
+                      placeholder="e.g. Alex Mercer"
+                      className="zentra-input"
                     />
                   )}
                 </div>
 
-                {/* Difficulty */}
+                {/* Difficulty Tier */}
                 <div>
-                  <label style={{ display: 'block', color: 'var(--color-text-secondary)', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem' }}>Difficulty</label>
+                  <label style={{ display: 'block', color: 'var(--zentra-text-secondary)', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.45rem' }}>Difficulty</label>
                   <select
                     value={difficulty}
                     onChange={(e) => setDifficulty(e.target.value)}
-                    style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--color-card-border)', background: 'var(--color-bg-secondary)', color: 'var(--color-text-primary)', fontSize: '0.9rem' }}
+                    className="zentra-select"
                   >
-                    <option value="beginner">Beginner (Junior)</option>
-                    <option value="intermediate">Intermediate (Mid-Level)</option>
-                    <option value="advanced">Advanced (Senior / Architect)</option>
+                    <option value="beginner">Beginner (Junior Roles)</option>
+                    <option value="intermediate">Intermediate (Mid-Level Roles)</option>
+                    <option value="advanced">Advanced (Senior / Architect Roles)</option>
                   </select>
                 </div>
 
-                {/* Interview Mode */}
+                {/* Interview Mode Pills */}
                 <div>
-                  <label style={{ display: 'block', color: 'var(--color-text-secondary)', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem' }}>Interview Mode</label>
-                  <div className="interview-mode-grid" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '0.75rem' }}>
-                    <label style={{ padding: '0.85rem', background: setupMode === 'standard' ? 'rgba(99,102,241,0.15)' : 'var(--color-bg-secondary)', border: setupMode === 'standard' ? '1px solid #6366f1' : '1px solid var(--color-card-border)', borderRadius: '8px', cursor: 'pointer', textAlign: 'center' }}>
-                      <input type="radio" name="mode" value="standard" checked={setupMode === 'standard'} onChange={(e) => setSetupMode(e.target.value)} style={{ display: 'none' }} />
-                      <div style={{ fontWeight: 600, fontSize: '0.85rem', color: 'var(--color-text-primary)' }}>Standard Adaptive</div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.2rem' }}>Dynamic technical questions</div>
-                    </label>
-                    <label style={{ padding: '0.85rem', background: setupMode === 'keywords' ? 'rgba(99,102,241,0.15)' : 'var(--color-bg-secondary)', border: setupMode === 'keywords' ? '1px solid #6366f1' : '1px solid var(--color-card-border)', borderRadius: '8px', cursor: 'pointer', textAlign: 'center' }}>
-                      <input type="radio" name="mode" value="keywords" checked={setupMode === 'keywords'} onChange={(e) => setSetupMode(e.target.value)} style={{ display: 'none' }} />
-                      <div style={{ fontWeight: 600, fontSize: '0.85rem', color: 'var(--color-text-primary)' }}>Keyword Focused</div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.2rem' }}>Targeted key concepts</div>
-                    </label>
-                    <label style={{ padding: '0.85rem', background: setupMode === 'knowledge-base' ? 'rgba(99,102,241,0.15)' : 'var(--color-bg-secondary)', border: setupMode === 'knowledge-base' ? '1px solid #6366f1' : '1px solid var(--color-card-border)', borderRadius: '8px', cursor: 'pointer', textAlign: 'center' }}>
-                      <input type="radio" name="mode" value="knowledge-base" checked={setupMode === 'knowledge-base'} onChange={(e) => setSetupMode(e.target.value)} style={{ display: 'none' }} />
-                      <div style={{ fontWeight: 600, fontSize: '0.85rem', color: 'var(--color-text-primary)' }}>Knowledge Base Only</div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginTop: '0.2rem' }}>Restricted to PDF docs</div>
-                    </label>
+                  <label style={{ display: 'block', color: 'var(--zentra-text-secondary)', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem' }}>Assessment Mode</label>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem' }}>
+                    {[
+                      { id: 'standard', name: 'Standard Adaptive', desc: 'Dynamic AI question curve' },
+                      { id: 'keywords', name: 'Keyword Focused', desc: 'Target key concepts' },
+                      { id: 'knowledge-base', name: 'Knowledge Base Only', desc: 'Restricted to selected documents' },
+                    ].map((mode) => {
+                      const isSelected = setupMode === mode.id
+                      return (
+                        <div
+                          key={mode.id}
+                          onClick={() => setSetupMode(mode.id)}
+                          style={{
+                            padding: '1rem',
+                            borderRadius: '16px',
+                            background: isSelected ? 'rgba(37, 99, 235, 0.08)' : 'var(--zentra-bg-muted)',
+                            border: `1.5px solid ${isSelected ? '#2563eb' : 'var(--zentra-border)'}`,
+                            cursor: 'pointer',
+                            transition: 'all 0.2s',
+                          }}
+                        >
+                          <div style={{ fontWeight: 600, fontSize: '0.85rem', color: isSelected ? '#2563eb' : 'var(--zentra-text-primary)' }}>
+                            {mode.name}
+                          </div>
+                          <div style={{ fontSize: '0.75rem', color: 'var(--zentra-text-muted)', marginTop: '0.2rem' }}>
+                            {mode.desc}
+                          </div>
+                        </div>
+                      )
+                    })}
                   </div>
                 </div>
 
-                {/* Conditional Inputs */}
+                {/* Conditional Keyword Input */}
                 {setupMode === 'keywords' && (
                   <div>
-                    <label style={{ display: 'block', color: 'var(--color-text-secondary)', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem' }}>Keywords (comma separated)</label>
+                    <label style={{ display: 'block', color: 'var(--zentra-text-secondary)', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.45rem' }}>Target Concepts / Keywords</label>
                     <input
                       type="text"
                       value={setupData}
                       onChange={(e) => setSetupData(e.target.value)}
-                      placeholder="e.g. Binary Search, Arrays, Recursion, Time Complexity"
-                      style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--color-card-border)', background: 'var(--color-bg-secondary)', color: 'var(--color-text-primary)', fontSize: '0.9rem' }}
+                      placeholder="e.g. System Design, REST APIs, PostgreSQL, Indexing"
+                      className="zentra-input"
                     />
                   </div>
                 )}
 
+                {/* Conditional Knowledge Base Document Selector */}
                 {setupMode === 'knowledge-base' && (
                   <div>
-                    <label style={{ display: 'block', color: 'var(--color-text-secondary)', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem' }}>Select Knowledge Base Documents</label>
+                    <label style={{ display: 'block', color: 'var(--zentra-text-secondary)', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.45rem' }}>Select Knowledge Base Documents</label>
                     {documents.length === 0 ? (
-                      <div style={{ color: 'var(--color-text-secondary)', fontSize: '0.85rem', padding: '0.75rem', background: 'var(--color-bg-secondary)', borderRadius: '8px' }}>
-                        No uploaded documents found. Please upload documents in Knowledge Base first.
+                      <div style={{ color: 'var(--zentra-text-muted)', fontSize: '0.825rem', padding: '1rem', background: 'var(--zentra-bg-muted)', borderRadius: '12px' }}>
+                        No documents available. Upload documents in Knowledge Base first.
                       </div>
                     ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '140px', overflowY: 'auto', background: 'var(--color-bg-secondary)', padding: '0.85rem', borderRadius: '8px', border: '1px solid var(--color-card-border)' }}>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '160px', overflowY: 'auto', background: 'var(--zentra-bg-muted)', padding: '0.85rem', borderRadius: '12px', border: '1px solid var(--zentra-border)' }}>
                         {documents.map((doc: DocumentData) => (
-                          <label key={doc.id} style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', color: 'var(--color-text-primary)', cursor: 'pointer', fontSize: '0.875rem' }}>
+                          <label key={doc.id} style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', color: 'var(--zentra-text-primary)', cursor: 'pointer', fontSize: '0.85rem' }}>
                             <input
                               type="checkbox"
                               checked={selectedDocIds.includes(doc.id)}
@@ -718,7 +730,7 @@ export default function InterviewPage() {
                                 if (e.target.checked) setSelectedDocIds([...selectedDocIds, doc.id]);
                                 else setSelectedDocIds(selectedDocIds.filter(id => id !== doc.id));
                               }}
-                              style={{ accentColor: '#6366f1' }}
+                              style={{ accentColor: '#2563eb' }}
                             />
                             <span>{doc.originalFilename}</span>
                           </label>
@@ -728,160 +740,89 @@ export default function InterviewPage() {
                   </div>
                 )}
 
-                {/* LLM Engine Selection */}
-                <div>
-                  <label style={{ display: 'block', color: 'var(--color-text-secondary)', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.5rem' }}>LLM Engine</label>
-                  <select
-                    value={selectedLLM}
-                    onChange={(e) => setSelectedLLM(e.target.value)}
-                    style={{ width: '100%', padding: '0.75rem', borderRadius: '8px', border: '1px solid var(--color-card-border)', background: 'var(--color-bg-secondary)', color: 'var(--color-text-primary)', fontSize: '0.9rem' }}
-                  >
-                    <option value="gemini">Gemini (Google DeepMind)</option>
-                    <option value="groq">Groq (High-Speed LLM)</option>
-                  </select>
-                </div>
 
+
+                {/* Submit Launch Button */}
                 <button
                   onClick={startLiveInterview}
                   disabled={isProcessing || (!candidateNameInput.trim() && !selectedCandidateId) || (setupMode === 'knowledge-base' && selectedDocIds.length === 0)}
-                  style={{
-                    marginTop: '1rem',
-                    padding: '1rem',
-                    background: 'linear-gradient(135deg, #6366f1, #4f46e5)',
-                    color: '#ffffff',
-                    border: 'none',
-                    borderRadius: '10px',
-                    cursor: 'pointer',
-                    fontWeight: 700,
-                    fontSize: '1rem',
-                    width: '100%',
-                    boxShadow: '0 4px 12px rgba(99,102,241,0.3)'
-                  }}
+                  className="zentra-btn zentra-btn-primary"
+                  style={{ width: '100%', padding: '0.9rem', fontSize: '0.95rem', justifyContent: 'center', marginTop: '0.5rem' }}
                 >
-                  {isProcessing ? 'Initializing Session...' : 'START LIVE INTERVIEW'}
+                  <Icon name="play_arrow" size={18} />
+                  <span>{isProcessing ? 'Initializing Session...' : 'Launch Live Technical Interview'}</span>
                 </button>
-
               </div>
             </div>
           ) : currentQuestion && (
-            /* Interviewer Live Interview Interface */
+            /* Live Interview Workspace */
             <>
               {/* Question Card */}
-              <div style={{ background: 'var(--color-card-bg)', border: '1px solid var(--color-card-border)', borderRadius: '16px', padding: '2rem', boxShadow: '0 4px 6px -1px rgba(0, 0, 0, 0.1)' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                  <span style={{ color: '#818cf8', fontWeight: 700, fontSize: '0.9rem', letterSpacing: '0.05em' }}>
+              <div className="zentra-card">
+                <div className="zentra-card-header" style={{ marginBottom: '1rem' }}>
+                  <span className="zentra-badge info" style={{ fontWeight: 700 }}>
                     QUESTION {currentQuestion.questionNumber}
                   </span>
-                  <span style={{ color: 'var(--color-text-secondary)', fontSize: '0.8rem', background: 'var(--color-bg-tertiary)', padding: '4px 10px', borderRadius: '12px', border: '1px solid var(--color-card-border)' }}>
+                  <span className="zentra-pill-tag">
                     {currentQuestion.topic || 'Technical Question'} &bull; <span style={{ textTransform: 'capitalize' }}>{currentQuestion.difficulty || difficulty}</span>
                   </span>
                 </div>
 
-                <h2 style={{ color: 'var(--color-text-primary)', fontSize: '1.35rem', lineHeight: 1.5, margin: '0 0 1.5rem 0', fontWeight: 500 }}>
+                <h2 style={{ color: 'var(--zentra-text-primary)', fontSize: '1.35rem', lineHeight: 1.5, margin: '0 0 1.5rem 0', fontWeight: 600, letterSpacing: '-0.01em' }}>
                   {currentQuestion.content}
                 </h2>
 
-                <hr style={{ borderColor: 'var(--color-card-border)', margin: '1.5rem 0' }} />
+                <div style={{ height: '1px', background: 'var(--zentra-border-subtle)', margin: '1.25rem 0' }}></div>
 
-                {/* Candidate Answer Input Section */}
+                {/* Candidate Answer Box */}
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <label style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem', fontWeight: 600 }}>Candidate Answer (Live Transcript)</label>
-                    <span style={{ color: 'var(--color-text-muted)', fontSize: '0.75rem' }}>Ask candidate and type/record answer</span>
+                    <label style={{ color: 'var(--zentra-text-primary)', fontSize: '0.875rem', fontWeight: 600 }}>Candidate Response &amp; Transcript</label>
+                    <span style={{ color: 'var(--zentra-text-muted)', fontSize: '0.75rem' }}>Ask candidate and record or type response</span>
                   </div>
 
                   <textarea
                     value={textAnswer}
                     onChange={(e) => setTextAnswer(e.target.value)}
-                    placeholder="Enter or record candidate's response..."
+                    placeholder="Enter candidate's answer or click record below..."
                     disabled={isProcessing || isRecording}
-                    style={{
-                      width: '100%',
-                      padding: '1rem',
-                      borderRadius: '10px',
-                      border: '1px solid var(--color-card-border)',
-                      background: 'var(--color-bg-tertiary)',
-                      color: 'var(--color-text-primary)',
-                      minHeight: '130px',
-                      fontFamily: 'inherit',
-                      fontSize: '0.95rem',
-                      lineHeight: 1.5,
-                      resize: 'vertical'
-                    }}
+                    className="zentra-input"
+                    style={{ minHeight: '140px', resize: 'vertical', lineHeight: 1.6 }}
                   />
 
                   {micError && (
-                    <div style={{ padding: '0.6rem 1rem', borderRadius: '8px', backgroundColor: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#ef4444', fontSize: '0.85rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                    <div style={{ padding: '0.6rem 1rem', borderRadius: '12px', background: 'rgba(239, 68, 68, 0.08)', color: '#dc2626', fontSize: '0.825rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
                       <Icon name="warning" size={16} />
                       <span>{micError}</span>
                     </div>
                   )}
 
-                  {/* Actions Bar: Record (Whisper) & Submit */}
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '1rem' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+                  {/* Action Toolbar */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
                       {isRecording ? (
                         <button
                           onClick={stopRecording}
                           type="button"
-                          style={{
-                            padding: '0.75rem 1.25rem',
-                            background: 'rgba(239,68,68,0.2)',
-                            color: '#ef4444',
-                            border: '1px solid #ef4444',
-                            borderRadius: '8px',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.5rem',
-                            fontWeight: 600,
-                            fontSize: '0.875rem'
-                          }}
+                          className="zentra-btn zentra-btn-danger"
                         >
-                          <span style={{ width: '10px', height: '10px', borderRadius: '50%', backgroundColor: '#ef4444' }} />
-                          Stop Recording ({String(Math.floor(recordingDuration / 60)).padStart(2, '0')}:{String(recordingDuration % 60).padStart(2, '0')})
+                          <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#dc2626', display: 'inline-block' }}></span>
+                          <span>Stop Recording ({String(Math.floor(recordingDuration / 60)).padStart(2, '0')}:{String(recordingDuration % 60).padStart(2, '0')})</span>
                         </button>
                       ) : isTranscribing ? (
-                        <button
-                          disabled
-                          type="button"
-                          style={{
-                            padding: '0.75rem 1.25rem',
-                            background: 'rgba(99,102,241,0.15)',
-                            color: '#818cf8',
-                            border: '1px solid rgba(99,102,241,0.3)',
-                            borderRadius: '8px',
-                            cursor: 'not-allowed',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.5rem',
-                            fontSize: '0.875rem'
-                          }}
-                        >
-                          <Icon name="refresh" size={18} />
-                          Transcribing via Whisper...
+                        <button disabled type="button" className="zentra-btn zentra-btn-secondary">
+                          <Icon name="sync" size={16} />
+                          <span>Transcribing with Whisper...</span>
                         </button>
                       ) : (
                         <button
                           onClick={startRecording}
                           disabled={isProcessing}
                           type="button"
-                          style={{
-                            padding: '0.75rem 1.25rem',
-                            background: 'var(--color-bg-tertiary)',
-                            color: 'var(--color-text-primary)',
-                            border: '1px solid var(--color-card-border)',
-                            borderRadius: '8px',
-                            cursor: 'pointer',
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '0.5rem',
-                            fontWeight: 500,
-                            fontSize: '0.875rem'
-                          }}
+                          className="zentra-btn zentra-btn-secondary"
                         >
-                          <Icon name="mic" size={18} />
-                          Record Candidate (Whisper STT)
+                          <Icon name="mic" size={16} />
+                          <span>Record Answer (Whisper STT)</span>
                         </button>
                       )}
 
@@ -889,17 +830,10 @@ export default function InterviewPage() {
                         <button
                           onClick={() => setTextAnswer('')}
                           type="button"
-                          style={{
-                            padding: '0.4rem 0.75rem',
-                            background: 'transparent',
-                            color: 'var(--color-text-muted)',
-                            border: '1px solid var(--color-card-border)',
-                            borderRadius: '6px',
-                            cursor: 'pointer',
-                            fontSize: '0.75rem'
-                          }}
+                          className="zentra-btn zentra-btn-secondary"
+                          style={{ padding: '0.45rem 0.85rem', fontSize: '0.8rem' }}
                         >
-                          Clear Answer
+                          Clear
                         </button>
                       )}
                     </div>
@@ -907,92 +841,87 @@ export default function InterviewPage() {
                     <button
                       onClick={submitTextAnswer}
                       disabled={isProcessing || isRecording || isTranscribing || !textAnswer.trim()}
-                      style={{
-                        padding: '0.75rem 1.75rem',
-                        background: 'linear-gradient(135deg, #6366f1, #4f46e5)',
-                        color: '#ffffff',
-                        border: 'none',
-                        borderRadius: '8px',
-                        cursor: 'pointer',
-                        fontWeight: 600,
-                        fontSize: '0.9rem',
-                        boxShadow: '0 2px 8px rgba(99,102,241,0.25)'
-                      }}
+                      className="zentra-btn zentra-btn-primary"
                     >
-                      {isProcessing ? 'Evaluating Answer...' : 'Submit Answer & Evaluate'}
+                      <Icon name="check" size={16} />
+                      <span>{isProcessing ? 'Evaluating Answer...' : 'Submit & Evaluate Answer'}</span>
                     </button>
                   </div>
                 </div>
               </div>
 
-              {/* AI Evaluation Result Box */}
+              {/* Evaluation Panel */}
               {lastEvaluation && (
-                <div style={{ background: 'rgba(99,102,241,0.06)', border: '1px solid rgba(99,102,241,0.2)', borderRadius: '16px', padding: '1.5rem', display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#10b981', fontWeight: 600 }}>
-                      <Icon name="check_circle" size={20} />
-                      <span>AI Answer Evaluation Complete</span>
+                <div className="zentra-card" style={{ borderColor: 'rgba(37, 99, 235, 0.25)', background: 'linear-gradient(180deg, rgba(239, 246, 255, 0.5) 0%, rgba(255, 255, 255, 1) 100%)' }}>
+                  <div className="zentra-card-header" style={{ marginBottom: '1rem' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#059669', fontWeight: 700 }}>
+                      <Icon name="check_circle" size={18} />
+                      <span>Answer Evaluated</span>
                     </div>
-                    <span style={{ fontSize: '1.25rem', fontWeight: 700, color: (lastEvaluation.score || 0) >= 75 ? '#10b981' : (lastEvaluation.score || 0) >= 50 ? '#f59e0b' : '#ef4444' }}>
-                      Score: {lastEvaluation.score}/100
+                    <span style={{ fontSize: '1.35rem', fontWeight: 800, color: (lastEvaluation.score || 0) >= 75 ? '#059669' : (lastEvaluation.score || 0) >= 50 ? '#d97706' : '#dc2626' }}>
+                      {lastEvaluation.score}/100
                     </span>
                   </div>
 
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.75rem', fontSize: '0.85rem' }}>
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '0.85rem', fontSize: '0.85rem', marginBottom: '1rem' }}>
                     {lastEvaluation.correctness && (
-                      <div>
-                        <span style={{ color: 'var(--color-text-muted)', display: 'block', fontSize: '0.75rem' }}>Correctness</span>
-                        <span style={{ color: 'var(--color-text-primary)', fontWeight: 500 }}>{lastEvaluation.correctness}</span>
+                      <div style={{ background: 'var(--zentra-bg-surface)', padding: '0.85rem', borderRadius: '12px', border: '1px solid var(--zentra-border)' }}>
+                        <span style={{ color: 'var(--zentra-text-muted)', display: 'block', fontSize: '0.725rem', fontWeight: 600 }}>Correctness</span>
+                        <span style={{ color: 'var(--zentra-text-primary)', fontWeight: 600 }}>{lastEvaluation.correctness}</span>
                       </div>
                     )}
                     {lastEvaluation.completeness && (
-                      <div>
-                        <span style={{ color: 'var(--color-text-muted)', display: 'block', fontSize: '0.75rem' }}>Completeness</span>
-                        <span style={{ color: 'var(--color-text-primary)', fontWeight: 500 }}>{lastEvaluation.completeness}</span>
+                      <div style={{ background: 'var(--zentra-bg-surface)', padding: '0.85rem', borderRadius: '12px', border: '1px solid var(--zentra-border)' }}>
+                        <span style={{ color: 'var(--zentra-text-muted)', display: 'block', fontSize: '0.725rem', fontWeight: 600 }}>Completeness</span>
+                        <span style={{ color: 'var(--zentra-text-primary)', fontWeight: 600 }}>{lastEvaluation.completeness}</span>
                       </div>
                     )}
                     {lastEvaluation.technicalAccuracy && (
-                      <div>
-                        <span style={{ color: 'var(--color-text-muted)', display: 'block', fontSize: '0.75rem' }}>Technical Accuracy</span>
-                        <span style={{ color: 'var(--color-text-primary)', fontWeight: 500 }}>{lastEvaluation.technicalAccuracy}</span>
+                      <div style={{ background: 'var(--zentra-bg-surface)', padding: '0.85rem', borderRadius: '12px', border: '1px solid var(--zentra-border)' }}>
+                        <span style={{ color: 'var(--zentra-text-muted)', display: 'block', fontSize: '0.725rem', fontWeight: 600 }}>Technical Accuracy</span>
+                        <span style={{ color: 'var(--zentra-text-primary)', fontWeight: 600 }}>{lastEvaluation.technicalAccuracy}</span>
                       </div>
                     )}
                   </div>
 
                   {lastEvaluation.feedback && (
-                    <div style={{ fontSize: '0.9rem', color: 'var(--color-text-secondary)', lineHeight: 1.5 }}>
-                      <strong style={{ color: 'var(--color-text-primary)' }}>Feedback: </strong>
+                    <div style={{ fontSize: '0.875rem', color: 'var(--zentra-text-secondary)', lineHeight: 1.6, background: 'var(--zentra-bg-surface)', padding: '1rem', borderRadius: '12px', border: '1px solid var(--zentra-border)' }}>
+                      <strong style={{ color: 'var(--zentra-text-primary)' }}>Feedback: </strong>
                       {lastEvaluation.feedback}
                     </div>
                   )}
                 </div>
               )}
 
-              {/* Next Question Suggestions */}
+              {/* Follow-up Questions Suggestions */}
               {suggestedQuestions.length > 0 && (
-                <div style={{ background: 'var(--color-card-bg)', border: '1px solid var(--color-card-border)', borderRadius: '16px', padding: '1.5rem' }}>
-                  <h3 style={{ margin: '0 0 1rem 0', color: 'var(--color-text-primary)', fontSize: '1.1rem', fontWeight: 600 }}>Select Next Question</h3>
+                <div className="zentra-card">
+                  <div className="zentra-card-header">
+                    <div>
+                      <h3 className="zentra-card-title">Adaptive Follow-Up Questions</h3>
+                      <span style={{ fontSize: '0.8rem', color: 'var(--zentra-text-muted)' }}>Choose next question dynamically adapted to candidate score</span>
+                    </div>
+                    <span className="zentra-dot-menu">&bull;&bull;&bull;</span>
+                  </div>
+
                   <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
                     {suggestedQuestions.map((s, idx) => (
                       <button
                         key={idx}
                         onClick={() => selectNextQuestion(s)}
                         disabled={isProcessing}
+                        className="zentra-card"
                         style={{
                           textAlign: 'left',
-                          padding: '1rem 1.25rem',
-                          background: 'var(--color-bg-tertiary)',
-                          border: '1px solid var(--color-card-border)',
-                          borderRadius: '10px',
+                          padding: '1.15rem 1.35rem',
                           cursor: 'pointer',
                           display: 'flex',
                           flexDirection: 'column',
                           gap: '0.35rem',
-                          transition: 'all 0.2s'
                         }}
                       >
-                        <div style={{ color: 'var(--color-text-primary)', fontSize: '0.95rem', fontWeight: 500 }}>{s.question}</div>
-                        {s.reason && <div style={{ color: 'var(--color-text-secondary)', fontSize: '0.8rem' }}><strong>AI Note:</strong> {s.reason}</div>}
+                        <div style={{ color: 'var(--zentra-text-primary)', fontSize: '0.95rem', fontWeight: 600 }}>{s.question}</div>
+                        {s.reason && <div style={{ color: 'var(--zentra-text-muted)', fontSize: '0.8rem' }}><strong>Adaptive rationale:</strong> {s.reason}</div>}
                       </button>
                     ))}
                   </div>
@@ -1002,36 +931,47 @@ export default function InterviewPage() {
           )}
         </div>
 
-        {/* Side Panel: AI Assistant & Session Stats */}
-        <div className="interview-side-col" style={{ flex: 1, minWidth: '300px', maxWidth: '380px', background: 'var(--color-bg-tertiary)', borderLeft: '1px solid var(--color-card-border)', padding: '1.5rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-          <div style={{ borderBottom: '1px solid var(--color-card-border)', paddingBottom: '1rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem' }}>
-              <Icon name="smart_toy" size={24} style={{ color: '#6366f1' }} />
-              <h3 style={{ margin: 0, color: 'var(--color-text-primary)', fontSize: '1.1rem', fontWeight: 600 }}>Interviewer Assistant</h3>
+        {/* Side Panel: Interview Status & Assistant */}
+        <div style={{
+          width: '320px',
+          background: 'var(--zentra-bg-surface)',
+          borderLeft: '1px solid var(--zentra-border)',
+          padding: '1.75rem',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '1.25rem',
+          overflowY: 'auto',
+        }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.25rem' }}>
+              <Icon name="smart_toy" size={20} style={{ color: '#2563eb' }} />
+              <h3 style={{ margin: 0, color: 'var(--zentra-text-primary)', fontSize: '1rem', fontWeight: 700 }}>Interviewer Assistant</h3>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.8rem', color: 'var(--color-text-secondary)' }}>
-              <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: session ? '#10b981' : '#6366f1', display: 'inline-block' }} />
-              <span>{session ? 'Live Session Active' : 'Ready to Start'}</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.775rem', color: 'var(--zentra-text-muted)' }}>
+              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: session ? '#10b981' : '#64748b', display: 'inline-block' }}></span>
+              <span>{session ? 'Session Active' : 'Waiting for Launch'}</span>
             </div>
           </div>
 
           {session && (
             <>
-              {/* Candidate Info */}
-              <div style={{ background: 'var(--color-bg-secondary)', border: '1px solid var(--color-card-border)', borderRadius: '10px', padding: '1rem' }}>
-                <div style={{ color: 'var(--color-text-muted)', fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', marginBottom: '0.5rem' }}>Candidate</div>
-                <div style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--color-text-primary)' }}>{session.candidateName || 'Candidate'}</div>
+              {/* Candidate Pill Card */}
+              <div style={{ background: 'var(--zentra-bg-muted)', border: '1px solid var(--zentra-border)', borderRadius: '16px', padding: '1rem' }}>
+                <span style={{ color: 'var(--zentra-text-muted)', fontSize: '0.725rem', fontWeight: 600, textTransform: 'uppercase' }}>Candidate</span>
+                <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--zentra-text-primary)', marginTop: '0.2rem' }}>
+                  {session.candidateName || 'Candidate'}
+                </div>
               </div>
 
               {/* Progress & Live Score */}
-              <div style={{ background: 'var(--color-bg-secondary)', border: '1px solid var(--color-card-border)', borderRadius: '10px', padding: '1rem' }}>
+              <div style={{ background: 'var(--zentra-bg-muted)', border: '1px solid var(--zentra-border)', borderRadius: '16px', padding: '1rem' }}>
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
-                  <span style={{ color: 'var(--color-text-secondary)', fontSize: '0.8rem' }}>Questions Evaluated</span>
-                  <span style={{ fontSize: '1rem', fontWeight: 700, color: '#818cf8' }}>{evaluations.length}</span>
+                  <span style={{ color: 'var(--zentra-text-muted)', fontSize: '0.8rem' }}>Evaluated</span>
+                  <span style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--zentra-text-primary)' }}>{evaluations.length}</span>
                 </div>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '0.5rem' }}>
-                  <span style={{ color: 'var(--color-text-secondary)', fontSize: '0.8rem' }}>Live Average Score</span>
-                  <span style={{ fontSize: '1.2rem', fontWeight: 700, color: avgScore >= 75 ? '#10b981' : avgScore >= 50 ? '#f59e0b' : '#ef4444' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ color: 'var(--zentra-text-muted)', fontSize: '0.8rem' }}>Live Score</span>
+                  <span style={{ fontSize: '1.25rem', fontWeight: 700, color: avgScore >= 75 ? '#059669' : avgScore >= 50 ? '#d97706' : '#dc2626' }}>
                     {evaluations.length > 0 ? `${avgScore}%` : '—'}
                   </span>
                 </div>
@@ -1039,14 +979,14 @@ export default function InterviewPage() {
             </>
           )}
 
-          {/* Guidelines */}
-          <div style={{ marginTop: 'auto', background: 'rgba(99,102,241,0.08)', border: '1px solid rgba(99,102,241,0.2)', borderRadius: '10px', padding: '1rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.35rem', color: '#818cf8', fontSize: '0.85rem', fontWeight: 600 }}>
+          {/* Guidelines Box */}
+          <div style={{ marginTop: 'auto', background: 'var(--zentra-bg-muted)', border: '1px solid var(--zentra-border)', borderRadius: '16px', padding: '1rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.45rem', marginBottom: '0.35rem', color: '#2563eb', fontSize: '0.825rem', fontWeight: 600 }}>
               <Icon name="lightbulb" size={16} />
-              <span>Interviewer Instructions</span>
+              <span>Interviewer Notice</span>
             </div>
-            <div style={{ color: 'var(--color-text-secondary)', fontSize: '0.8rem', lineHeight: 1.4 }}>
-              The Candidate does not access this live page. Read questions to the candidate and record or type their responses here.
+            <div style={{ color: 'var(--zentra-text-secondary)', fontSize: '0.775rem', lineHeight: 1.5 }}>
+              Candidate will access results upon evaluation completion. Ask questions and record responses directly.
             </div>
           </div>
         </div>

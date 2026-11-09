@@ -3,7 +3,7 @@ import KnowledgeBaseClient from '@/components/KnowledgeBaseClient'
 
 export default function KnowledgeBasePage() {
   return (
-    <div className="page-container">
+    <div style={{ padding: '2rem', minHeight: '100%' }}>
       <KnowledgeBaseClient />
     </div>
   )

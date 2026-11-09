@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import crypto from 'crypto';
 import prisma from '@/lib/db';
 import { verifyOtpHash, OTP_MAX_ATTEMPTS } from '@/lib/otp';
 import { getAppSession, getServerInstanceId } from '@/lib/auth';
@@ -7,35 +8,25 @@ import { createAuditLog } from '@/lib/audit-log';
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { email, role, otp } = body;
+    const { email, otp, role, purpose = 'EMAIL_VERIFICATION' } = body;
 
-    if (!email || !role || !otp) {
-      return NextResponse.json({ error: 'Email, role, and verification code are required.' }, { status: 400 });
+    if (!email || !otp) {
+      return NextResponse.json({ error: 'Email and verification code are required.' }, { status: 400 });
     }
 
     const normalizedEmail = email.trim().toLowerCase();
     const cleanOtp = otp.toString().trim();
-
-    // Security check: Admin OTP login is strictly forbidden
-    if (role === 'ADMIN') {
-      return NextResponse.json(
-        { error: 'Admin accounts must authenticate using username and password.' },
-        { status: 403 }
-      );
-    }
-
-    if (role !== 'CANDIDATE' && role !== 'INTERVIEWER') {
-      return NextResponse.json({ error: 'Invalid role specified.' }, { status: 400 });
-    }
+    const targetPurpose = purpose === 'PASSWORD_RESET' ? 'PASSWORD_RESET' : 'EMAIL_VERIFICATION';
 
     if (!/^\d{6}$/.test(cleanOtp)) {
       return NextResponse.json({ error: 'Verification code must be a 6-digit number.' }, { status: 400 });
     }
 
-    // Find the latest unused OTP record for this email
+    // Find the latest unused OTP record for this email AND exact purpose
     const otpRecord = await prisma.otpVerification.findFirst({
       where: {
         email: normalizedEmail,
+        purpose: targetPurpose,
         usedAt: null,
       },
       orderBy: { createdAt: 'desc' },
@@ -43,14 +34,13 @@ export async function POST(req: NextRequest) {
     });
 
     if (!otpRecord) {
-      const failureAction = role === 'CANDIDATE' ? 'CANDIDATE_OTP_FAILED' : 'INTERVIEWER_OTP_FAILED';
       createAuditLog({
-        action: failureAction,
+        action: targetPurpose === 'PASSWORD_RESET' ? 'PASSWORD_RESET_OTP_FAILED' : 'EMAIL_VERIFICATION_FAILED',
         status: 'FAILURE',
-        metadata: { email: normalizedEmail, reason: 'No active OTP found' },
+        metadata: { email: normalizedEmail, reason: 'No active OTP found for purpose', purpose: targetPurpose },
       });
       return NextResponse.json(
-        { error: 'No active verification code found. Please request a new code.' },
+        { error: 'No active verification code found for this request. Please request a new code.' },
         { status: 400 }
       );
     }
@@ -61,12 +51,11 @@ export async function POST(req: NextRequest) {
         where: { id: otpRecord.id },
         data: { usedAt: new Date() },
       });
-      const failureAction = role === 'CANDIDATE' ? 'CANDIDATE_OTP_FAILED' : 'INTERVIEWER_OTP_FAILED';
       createAuditLog({
         userId: otpRecord.userId ?? undefined,
-        action: failureAction,
+        action: targetPurpose === 'PASSWORD_RESET' ? 'PASSWORD_RESET_OTP_FAILED' : 'EMAIL_VERIFICATION_FAILED',
         status: 'FAILURE',
-        metadata: { email: normalizedEmail, reason: 'Expired OTP' },
+        metadata: { email: normalizedEmail, reason: 'Expired OTP', purpose: targetPurpose },
       });
       return NextResponse.json(
         { error: 'This verification code has expired. Please request a new code.' },
@@ -80,12 +69,11 @@ export async function POST(req: NextRequest) {
         where: { id: otpRecord.id },
         data: { usedAt: new Date() },
       });
-      const failureAction = role === 'CANDIDATE' ? 'CANDIDATE_OTP_FAILED' : 'INTERVIEWER_OTP_FAILED';
       createAuditLog({
         userId: otpRecord.userId ?? undefined,
-        action: failureAction,
+        action: targetPurpose === 'PASSWORD_RESET' ? 'PASSWORD_RESET_OTP_FAILED' : 'EMAIL_VERIFICATION_FAILED',
         status: 'FAILURE',
-        metadata: { email: normalizedEmail, reason: 'Max attempts exceeded' },
+        metadata: { email: normalizedEmail, reason: 'Max attempts exceeded', purpose: targetPurpose },
       });
       return NextResponse.json(
         { error: 'Too many incorrect attempts. This code has been invalidated. Please request a new code.' },
@@ -106,12 +94,11 @@ export async function POST(req: NextRequest) {
         },
       });
 
-      const failureAction = role === 'CANDIDATE' ? 'CANDIDATE_OTP_FAILED' : 'INTERVIEWER_OTP_FAILED';
       createAuditLog({
         userId: otpRecord.userId ?? undefined,
-        action: failureAction,
+        action: targetPurpose === 'PASSWORD_RESET' ? 'PASSWORD_RESET_OTP_FAILED' : 'EMAIL_VERIFICATION_FAILED',
         status: 'FAILURE',
-        metadata: { email: normalizedEmail, attempts: newAttempts },
+        metadata: { email: normalizedEmail, attempts: newAttempts, purpose: targetPurpose },
       });
 
       const remaining = OTP_MAX_ATTEMPTS - newAttempts;
@@ -126,7 +113,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // OTP is valid! Invalidate immediately (single-use)
+    // OTP is valid! Mark as used atomically
     await prisma.otpVerification.update({
       where: { id: otpRecord.id },
       data: { usedAt: new Date() },
@@ -146,9 +133,55 @@ export async function POST(req: NextRequest) {
       });
     }
 
-    if (!user || user.role !== role) {
-      return NextResponse.json({ error: 'Account not authorized for this role.' }, { status: 403 });
+    if (!user) {
+      return NextResponse.json({ error: 'Account not found.' }, { status: 404 });
     }
+
+    // --- FLOW: PASSWORD RESET ---
+    if (targetPurpose === 'PASSWORD_RESET') {
+      // Issue a single-use reset authorization token
+      const resetToken = crypto.randomUUID();
+      const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
+
+      // Store in AppSettings
+      await prisma.appSettings.upsert({
+        where: { key: `pwd_reset_${resetToken}` },
+        update: {
+          value: JSON.stringify({ userId: user.id, email: normalizedEmail, expiresAt }),
+        },
+        create: {
+          key: `pwd_reset_${resetToken}`,
+          value: JSON.stringify({ userId: user.id, email: normalizedEmail, expiresAt }),
+        },
+      });
+
+      createAuditLog({
+        userId: user.id,
+        username: user.username,
+        action: 'PASSWORD_RESET_OTP_VERIFIED',
+        status: 'SUCCESS',
+        metadata: { email: normalizedEmail },
+      });
+
+      // No session is created during password reset!
+      return NextResponse.json({
+        success: true,
+        resetToken,
+        message: 'Verification code confirmed. You can now set a new password.',
+      });
+    }
+
+    // --- FLOW: EMAIL VERIFICATION (Account registration) ---
+    // If role was supplied, verify it matches
+    if (role && user.role !== role) {
+      return NextResponse.json({ error: 'Account role mismatch.' }, { status: 403 });
+    }
+
+    // Mark email as verified
+    await prisma.user.update({
+      where: { id: user.id },
+      data: { emailVerified: true },
+    });
 
     // Ensure Candidate record exists if CANDIDATE
     if (user.role === 'CANDIDATE') {
@@ -159,15 +192,20 @@ export async function POST(req: NextRequest) {
         await prisma.candidate.create({
           data: {
             userId: user.id,
-            name: user.username,
+            name: user.name || user.username,
             email: normalizedEmail,
           },
         });
       }
     }
 
-    // Establish iron-session
-    const redirectUrl = user.role === 'CANDIDATE' ? '/candidate' : '/dashboard';
+    // Establish iron-session after successful registration verification
+    const redirectMap: Record<string, string> = {
+      ADMIN: '/admin',
+      INTERVIEWER: '/dashboard',
+      CANDIDATE: '/candidate',
+    };
+    const redirectUrl = redirectMap[user.role] || '/dashboard';
     const response = NextResponse.json({ success: true, redirect: redirectUrl });
     const session = await getAppSession(req as unknown as Request, response as unknown as Response);
 
@@ -178,12 +216,10 @@ export async function POST(req: NextRequest) {
     session.isLoggedIn = true;
     await session.save();
 
-    // Audit log success
-    const successAction = role === 'CANDIDATE' ? 'CANDIDATE_OTP_VERIFIED' : 'INTERVIEWER_OTP_VERIFIED';
     createAuditLog({
       userId: user.id,
       username: user.username,
-      action: successAction,
+      action: 'USER_EMAIL_VERIFIED',
       status: 'SUCCESS',
       metadata: { role: user.role, email: normalizedEmail },
     });

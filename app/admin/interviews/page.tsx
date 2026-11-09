@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react'
 import Icon from '@/components/Icon'
+import Link from 'next/link'
 
 interface InterviewItem {
   id: string
@@ -79,79 +80,53 @@ export default function AdminInterviewsPage() {
 
   const getScoreBadge = (score: number | null | undefined) => {
     if (score === null || score === undefined || typeof score !== 'number' || !isFinite(score)) {
-      return <span style={{ color: 'var(--color-text-muted)', fontSize: '0.85rem' }}>—</span>
+      return <span style={{ color: 'var(--zentra-text-muted)', fontSize: '0.85rem' }}>—</span>
     }
     const percent = Math.round(score * 10) / 10
-    let bg = 'rgba(16,185,129,0.15)'
-    let text = '#10b981'
-    if (percent < 50) {
-      bg = 'rgba(239,68,68,0.15)'
-      text = '#ef4444'
-    } else if (percent < 75) {
-      bg = 'rgba(245,158,11,0.15)'
-      text = '#f59e0b'
-    }
+    const badgeType = percent >= 75 ? 'success' : percent >= 50 ? 'warning' : 'danger'
 
     return (
-      <span style={{
-        padding: '0.25rem 0.6rem',
-        borderRadius: '8px',
-        fontSize: '0.8rem',
-        fontWeight: 600,
-        backgroundColor: bg,
-        color: text,
-      }}>
+      <span className={`zentra-badge ${badgeType}`}>
         {percent}%
       </span>
     )
   }
 
   return (
-    <div style={{ maxWidth: '1400px', margin: '0 auto' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.5rem', flexWrap: 'wrap', gap: '1rem' }}>
+    <div className="zentra-page-container">
+      {/* Header */}
+      <div className="zentra-page-header">
         <div>
-          <h1 style={{ fontSize: '1.875rem', fontWeight: 700, margin: 0, color: 'var(--color-text-primary)' }}>Organization Interviews</h1>
-          <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem', marginTop: '0.25rem' }}>
-            Monitor and review interview sessions across all interviewers.
-          </p>
+          <div className="zentra-title-row">
+            <h1 className="zentra-page-title">Interviews</h1>
+            <span className="zentra-link-bubble" title="All Sessions">
+              <Icon name="link" size={16} />
+            </span>
+          </div>
+          <p className="zentra-page-subtitle">Monitor and review interview sessions across all interviewers and candidates.</p>
         </div>
-        <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center' }}>
-          <span style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)', padding: '0.4rem 0.8rem', backgroundColor: 'var(--color-card-bg)', border: '1px solid var(--color-card-border)', borderRadius: '8px' }}>
-            Total Interviews: <strong>{totalInterviews}</strong>
-          </span>
+
+        <div className="zentra-header-actions">
+          <div className="zentra-date-pill">
+            <Icon name="question_answer" size={16} style={{ color: 'var(--zentra-text-muted)' }} />
+            <span>Total Sessions: <strong>{totalInterviews}</strong></span>
+          </div>
         </div>
       </div>
 
-      {/* Filter controls */}
-      <div style={{
-        display: 'flex',
-        gap: '1rem',
-        marginBottom: '1.5rem',
-        flexWrap: 'wrap',
-        backgroundColor: 'var(--color-card-bg)',
-        border: '1px solid var(--color-card-border)',
-        padding: '1rem',
-        borderRadius: '12px'
-      }}>
+      {/* Toolbar Filter Card */}
+      <div className="zentra-card" style={{ padding: '1rem 1.25rem', marginBottom: '1.5rem', display: 'flex', gap: '1rem', flexWrap: 'wrap', alignItems: 'center' }}>
         <div style={{ flex: 1, minWidth: '240px', position: 'relative' }}>
           <input
             type="text"
             placeholder="Search candidate, interviewer, or type..."
             value={search}
             onChange={handleSearchChange}
-            style={{
-              width: '100%',
-              padding: '0.6rem 1rem 0.6rem 2.5rem',
-              borderRadius: '8px',
-              border: '1px solid var(--color-card-border)',
-              backgroundColor: 'var(--color-bg-secondary)',
-              color: 'var(--color-text-primary)',
-              fontSize: '0.875rem',
-              outline: 'none',
-            }}
+            className="zentra-input"
+            style={{ paddingLeft: '2.5rem' }}
           />
-          <div style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--color-text-secondary)', pointerEvents: 'none' }}>
-            <Icon name="search" size={18} />
+          <div style={{ position: 'absolute', left: '0.9rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--zentra-text-muted)', pointerEvents: 'none' }}>
+            <Icon name="search" size={17} />
           </div>
         </div>
 
@@ -159,17 +134,7 @@ export default function AdminInterviewsPage() {
           <select
             value={status}
             onChange={handleStatusChange}
-            style={{
-              width: '100%',
-              padding: '0.6rem 1rem',
-              borderRadius: '8px',
-              border: '1px solid var(--color-card-border)',
-              backgroundColor: 'var(--color-bg-secondary)',
-              color: 'var(--color-text-primary)',
-              fontSize: '0.875rem',
-              outline: 'none',
-              cursor: 'pointer',
-            }}
+            className="zentra-select"
           >
             <option value="ALL">All Statuses</option>
             <option value="active">Active</option>
@@ -179,145 +144,144 @@ export default function AdminInterviewsPage() {
 
         <button
           onClick={fetchInterviews}
-          style={{
-            padding: '0.6rem 1rem',
-            borderRadius: '8px',
-            border: '1px solid var(--color-card-border)',
-            backgroundColor: 'var(--color-bg-secondary)',
-            color: 'var(--color-text-primary)',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            fontSize: '0.875rem'
-          }}
+          className="zentra-btn zentra-btn-secondary"
+          title="Reload interviews"
         >
           <Icon name="refresh" size={16} />
-          Refresh
+          <span>Refresh</span>
         </button>
       </div>
 
-      {/* Table */}
-      <div style={{ backgroundColor: 'var(--color-card-bg)', border: '1px solid var(--color-card-border)', borderRadius: '12px', overflowX: 'auto' }}>
-        <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: '800px' }}>
-          <thead>
-            <tr style={{ borderBottom: '1px solid var(--color-card-border)', backgroundColor: 'var(--color-bg-secondary)' }}>
-              <th style={{ padding: '1rem 1.25rem', fontWeight: 600, color: 'var(--color-text-secondary)', fontSize: '0.875rem' }}>Session ID</th>
-              <th style={{ padding: '1rem 1.25rem', fontWeight: 600, color: 'var(--color-text-secondary)', fontSize: '0.875rem' }}>Candidate</th>
-              <th style={{ padding: '1rem 1.25rem', fontWeight: 600, color: 'var(--color-text-secondary)', fontSize: '0.875rem' }}>Interviewer</th>
-              <th style={{ padding: '1rem 1.25rem', fontWeight: 600, color: 'var(--color-text-secondary)', fontSize: '0.875rem' }}>Type &amp; Difficulty</th>
-              <th style={{ padding: '1rem 1.25rem', fontWeight: 600, color: 'var(--color-text-secondary)', fontSize: '0.875rem' }}>Status</th>
-              <th style={{ padding: '1rem 1.25rem', fontWeight: 600, color: 'var(--color-text-secondary)', fontSize: '0.875rem' }}>Score</th>
-              <th style={{ padding: '1rem 1.25rem', fontWeight: 600, color: 'var(--color-text-secondary)', fontSize: '0.875rem' }}>Started Date</th>
-              <th style={{ padding: '1rem 1.25rem', fontWeight: 600, color: 'var(--color-text-secondary)', fontSize: '0.875rem', textAlign: 'right' }}>Action</th>
-            </tr>
-          </thead>
-          <tbody>
-            {loading ? (
+      {/* Table Card */}
+      <div className="zentra-card" style={{ padding: 0, overflow: 'hidden' }}>
+        <div style={{ overflowX: 'auto' }}>
+          <table className="zentra-table">
+            <thead>
               <tr>
-                <td colSpan={8} style={{ padding: '3rem', textAlign: 'center', color: 'var(--color-text-secondary)' }}>
-                  Loading interviews...
-                </td>
+                <th style={{ width: '110px' }}>Session ID</th>
+                <th>Candidate</th>
+                <th>Interviewer</th>
+                <th>Mode &amp; Level</th>
+                <th>Status</th>
+                <th>Score</th>
+                <th>Started</th>
+                <th style={{ textAlign: 'right' }}>Action</th>
               </tr>
-            ) : interviews.length === 0 ? (
-              <tr>
-                <td colSpan={8} style={{ padding: '3rem', textAlign: 'center', color: 'var(--color-text-secondary)' }}>
-                  No interviews found matching criteria.
-                </td>
-              </tr>
-            ) : (
-              interviews.map((item) => (
-                <tr key={item.id} style={{ borderBottom: '1px solid var(--color-card-border)' }}>
-                  <td style={{ padding: '1rem 1.25rem', color: 'var(--color-text-secondary)', fontSize: '0.8rem', fontFamily: 'monospace' }}>
-                    {item.id.substring(0, 8)}...
-                  </td>
-                  <td style={{ padding: '1rem 1.25rem', color: 'var(--color-text-primary)' }}>
-                    <div style={{ fontWeight: 500 }}>{item.candidate?.name || 'Unknown'}</div>
-                    {item.candidate?.email && (
-                      <div style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)' }}>{item.candidate.email}</div>
-                    )}
-                  </td>
-                  <td style={{ padding: '1rem 1.25rem', color: 'var(--color-text-primary)', fontSize: '0.875rem' }}>
-                    {item.interviewer ? (
-                      <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
-                        <Icon name="person" size={16} />
-                        {item.interviewer.displayName || item.interviewer.username}
-                      </span>
-                    ) : (
-                      <span style={{ color: 'var(--color-text-muted)', fontStyle: 'italic' }}>Unassigned</span>
-                    )}
-                  </td>
-                  <td style={{ padding: '1rem 1.25rem', color: 'var(--color-text-primary)', fontSize: '0.875rem' }}>
-                    <div style={{ textTransform: 'capitalize', fontWeight: 500 }}>{item.interviewType}</div>
-                    <div style={{ fontSize: '0.75rem', color: 'var(--color-text-secondary)', textTransform: 'capitalize' }}>
-                      Level: {item.difficulty}
-                    </div>
-                  </td>
-                  <td style={{ padding: '1rem 1.25rem' }}>
-                    <span style={{
-                      padding: '0.25rem 0.75rem',
-                      borderRadius: '9999px',
-                      fontSize: '0.75rem',
-                      fontWeight: 600,
-                      textTransform: 'capitalize',
-                      backgroundColor: item.status === 'completed' ? 'rgba(16,185,129,0.15)' : 'rgba(59,130,246,0.15)',
-                      color: item.status === 'completed' ? '#10b981' : '#3b82f6',
-                      border: item.status === 'completed' ? '1px solid rgba(16,185,129,0.3)' : '1px solid rgba(59,130,246,0.3)',
-                    }}>
-                      {item.status}
-                    </span>
-                  </td>
-                  <td style={{ padding: '1rem 1.25rem' }}>
-                    {getScoreBadge(item.score ?? item.report?.overallScore)}
-                  </td>
-                  <td style={{ padding: '1rem 1.25rem', color: 'var(--color-text-secondary)', fontSize: '0.875rem' }}>
-                    {new Date(item.startedAt).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
-                  </td>
-                  <td style={{ padding: '1rem 1.25rem', textAlign: 'right' }}>
-                    <a href={`/report/${item.id}`} style={{ textDecoration: 'none', color: '#818cf8', fontWeight: 500, fontSize: '0.85rem', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                      <Icon name="visibility" size={16} /> View Q&amp;A
-                    </a>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr>
+                  <td colSpan={8} style={{ padding: '3.5rem', textAlign: 'center', color: 'var(--zentra-text-muted)' }}>
+                    Loading interview sessions...
                   </td>
                 </tr>
-              ))
-            )}
-          </tbody>
-        </table>
+              ) : interviews.length === 0 ? (
+                <tr>
+                  <td colSpan={8} style={{ padding: '3.5rem', textAlign: 'center', color: 'var(--zentra-text-muted)' }}>
+                    No interviews match your filter criteria.
+                  </td>
+                </tr>
+              ) : (
+                interviews.map((item) => {
+                  const isCompleted = item.status === 'completed'
+                  const scoreVal = item.score ?? item.report?.overallScore
+                  return (
+                    <tr key={item.id}>
+                      <td style={{ color: 'var(--zentra-text-muted)', fontSize: '0.775rem', fontFamily: 'monospace' }}>
+                        {item.id.substring(0, 8)}...
+                      </td>
+                      <td>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                          <div style={{
+                            width: '32px',
+                            height: '32px',
+                            borderRadius: '50%',
+                            background: 'var(--zentra-bg-muted)',
+                            display: 'flex',
+                            alignItems: 'center',
+                            justifyContent: 'center',
+                            fontWeight: 700,
+                            fontSize: '0.8rem',
+                            color: 'var(--zentra-text-primary)',
+                            border: '1px solid var(--zentra-border)',
+                          }}>
+                            {item.candidate?.name?.[0] || 'C'}
+                          </div>
+                          <div>
+                            <div style={{ fontWeight: 600, color: 'var(--zentra-text-primary)' }}>{item.candidate?.name || 'Unknown'}</div>
+                            {item.candidate?.email && (
+                              <div style={{ fontSize: '0.75rem', color: 'var(--zentra-text-muted)' }}>{item.candidate.email}</div>
+                            )}
+                          </div>
+                        </div>
+                      </td>
+                      <td>
+                        <span style={{ fontSize: '0.85rem', color: 'var(--zentra-text-secondary)', display: 'inline-flex', alignItems: 'center', gap: '0.35rem' }}>
+                          <Icon name="person" size={15} style={{ color: 'var(--zentra-text-muted)' }} />
+                          {item.interviewer?.displayName || item.interviewer?.username || 'Unassigned'}
+                        </span>
+                      </td>
+                      <td>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.2rem' }}>
+                          <span style={{ fontWeight: 500, color: 'var(--zentra-text-primary)', textTransform: 'capitalize' }}>
+                            {item.interviewType}
+                          </span>
+                          <span style={{ fontSize: '0.725rem', color: 'var(--zentra-text-muted)', textTransform: 'capitalize' }}>
+                            Level: {item.difficulty}
+                          </span>
+                        </div>
+                      </td>
+                      <td>
+                        <span className={`zentra-badge ${isCompleted ? 'success' : item.status === 'active' ? 'warning' : 'neutral'}`} style={{ textTransform: 'capitalize' }}>
+                          {item.status}
+                        </span>
+                      </td>
+                      <td>
+                        {getScoreBadge(scoreVal)}
+                      </td>
+                      <td>
+                        <span style={{ color: 'var(--zentra-text-muted)', fontSize: '0.8rem' }}>
+                          {new Date(item.startedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </td>
+                      <td style={{ textAlign: 'right' }}>
+                        <Link
+                          href={`/report/${item.id}`}
+                          className="zentra-btn zentra-btn-secondary"
+                          style={{ padding: '0.35rem 0.85rem', fontSize: '0.775rem' }}
+                        >
+                          <Icon name="visibility" size={15} />
+                          <span>Report</span>
+                        </Link>
+                      </td>
+                    </tr>
+                  )
+                })
+              )}
+            </tbody>
+          </table>
+        </div>
 
         {/* Pagination Footer */}
         {totalPages > 1 && (
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem 1.25rem', borderTop: '1px solid var(--color-card-border)' }}>
-            <span style={{ fontSize: '0.875rem', color: 'var(--color-text-secondary)' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem 1.5rem', borderTop: '1px solid var(--zentra-border)' }}>
+            <span style={{ fontSize: '0.825rem', color: 'var(--zentra-text-muted)' }}>
               Page {page} of {totalPages}
             </span>
             <div style={{ display: 'flex', gap: '0.5rem' }}>
               <button
                 disabled={page <= 1}
                 onClick={() => setPage((p) => Math.max(1, p - 1))}
-                style={{
-                  padding: '0.4rem 0.8rem',
-                  borderRadius: '6px',
-                  border: '1px solid var(--color-card-border)',
-                  backgroundColor: 'var(--color-bg-secondary)',
-                  color: page <= 1 ? 'var(--color-text-muted)' : 'var(--color-text-primary)',
-                  cursor: page <= 1 ? 'not-allowed' : 'pointer',
-                  fontSize: '0.875rem'
-                }}
+                className="zentra-btn zentra-btn-secondary"
+                style={{ padding: '0.35rem 0.85rem', fontSize: '0.8rem' }}
               >
                 Previous
               </button>
               <button
                 disabled={page >= totalPages}
                 onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                style={{
-                  padding: '0.4rem 0.8rem',
-                  borderRadius: '6px',
-                  border: '1px solid var(--color-card-border)',
-                  backgroundColor: 'var(--color-bg-secondary)',
-                  color: page >= totalPages ? 'var(--color-text-muted)' : 'var(--color-text-primary)',
-                  cursor: page >= totalPages ? 'not-allowed' : 'pointer',
-                  fontSize: '0.875rem'
-                }}
+                className="zentra-btn zentra-btn-secondary"
+                style={{ padding: '0.35rem 0.85rem', fontSize: '0.8rem' }}
               >
                 Next
               </button>

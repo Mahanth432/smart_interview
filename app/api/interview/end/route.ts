@@ -58,14 +58,10 @@ export async function POST(req: NextRequest) {
 
     const gapTexts = session.gaps.map(g => `${g.concept} (${g.evidence})`).join("; ");
 
-    const scope = (session.scope as Record<string, unknown>) || {};
-    const { cookies } = await import("next/headers");
-    const cookieStore = await cookies();
-    const storedLLM = cookieStore.get('selectedLLM')?.value;
-    const sessionLLM = (scope.llmProvider as string) || undefined;
-    const effectiveProvider = (forceProvider && (forceProvider === 'gemini' || forceProvider === 'groq'))
+    // LLM Provider resolution - ONLY ADMIN users can pass a forced provider for controlled testing
+    const adminOverride = userSession.role === 'ADMIN' && forceProvider && (forceProvider === 'gemini' || forceProvider === 'groq')
       ? forceProvider
-      : (sessionLLM || (storedLLM === 'groq' || storedLLM === 'gemini' ? storedLLM : 'gemini'));
+      : undefined;
 
     const prompt = REPORT_GENERATOR_PROMPT
       .replace("{{candidateId}}", session.candidateId)
@@ -73,7 +69,7 @@ export async function POST(req: NextRequest) {
       .replace("{{averageScore}}", avgScore.toFixed(2))
       .replace("{{gaps}}", gapTexts);
 
-    const { text: reportRes, provider } = await generateLLMResponse(prompt + "\n\nOutput JSON only.", effectiveProvider);
+    const { text: reportRes } = await generateLLMResponse(prompt + "\n\nOutput JSON only.", adminOverride);
     
     let reportJson: Record<string, unknown> | null = null;
     try {
@@ -116,10 +112,11 @@ export async function POST(req: NextRequest) {
       metadata: { overallScore: avgScore, reportId: report.id }
     });
 
-    return NextResponse.json({ success: true, reportId: report.id, provider });
+    return NextResponse.json({ success: true, reportId: report.id });
   } catch (error: unknown) {
     console.error("End interview error:", error);
-    return NextResponse.json({ error: (error instanceof Error ? error.message : String(error)) }, { status: 500 });
+    const { handleLLMError } = await import("@/lib/llm");
+    return handleLLMError(error);
   }
 }
 

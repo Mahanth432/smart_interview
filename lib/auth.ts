@@ -1,5 +1,6 @@
-import { SessionOptions, getIronSession } from 'iron-session'
+import { SessionOptions, getIronSession, IronSession } from 'iron-session'
 import { cookies } from 'next/headers'
+import { cache } from 'react'
 
 declare global {
   var __SERVER_INSTANCE_ID: string | undefined;
@@ -8,7 +9,7 @@ declare global {
 // Generate a unique ID for this Node.js server instance.
 // Using globalThis ensures it survives Next.js dev server hot module reloading.
 export function getServerInstanceId() {
-  if (typeof process !== 'undefined' && process.release?.name === 'node') {
+  if (typeof process !== 'undefined' && process.env.NEXT_RUNTIME !== 'edge') {
     if (!globalThis.__SERVER_INSTANCE_ID) {
       globalThis.__SERVER_INSTANCE_ID = `instance-${Date.now()}-${Math.floor(Math.random() * 1000000)}`
     }
@@ -38,35 +39,58 @@ export const sessionOptions: SessionOptions = {
   },
 }
 
-// A wrapper around getIronSession that enforces the instanceId check.
-// If the session's instanceId doesn't match the current SERVER_INSTANCE_ID,
-// it treats the session as invalid (clears it) and returns defaultSession.
-export async function getAppSession(
-  req?: Request | null,
-  res?: Response | null
-) {
-  let session;
-  if (req && res) {
-    session = await getIronSession<SessionData>(req, res, sessionOptions)
-  } else {
-    session = await getIronSession<SessionData>(await cookies(), sessionOptions)
+// Per-request memoized session lookup for Server Components (layout + pages in the same request)
+const getCachedServerSession = cache(async (): Promise<IronSession<SessionData>> => {
+  const t0 = performance.now()
+  const cookieStore = await cookies()
+  const session = await getIronSession<SessionData>(cookieStore, sessionOptions)
+
+  if (session.isLoggedIn === undefined) {
+    session.isLoggedIn = false
   }
 
-  // Only enforce instanceId check in Node.js runtime to avoid Edge/Node mismatch
-  if (typeof process !== 'undefined' && process.release?.name === 'node') {
+  if (typeof process !== 'undefined' && process.env.NEXT_RUNTIME !== 'edge') {
     if (session.isLoggedIn && session.instanceId !== getServerInstanceId()) {
       session.isLoggedIn = false
       session.userId = undefined
       session.username = undefined
       session.role = undefined
       session.instanceId = undefined
-      // Do not call session.save() here if we don't have req/res, because Server Components throw errors when setting cookies
-      if (req && res) {
-        await session.save()
-      }
     }
   }
 
+  if (process.env.NODE_ENV === 'development') {
+    console.log(`[DEV TIMING] getCachedServerSession: ${(performance.now() - t0).toFixed(1)}ms (user=${session.username || 'anon'})`)
+  }
+
   return session
+})
+
+// A wrapper around getIronSession that enforces the instanceId check.
+// If the session's instanceId doesn't match the current SERVER_INSTANCE_ID,
+// it treats the session as invalid (clears it) and returns defaultSession.
+export async function getAppSession(
+  req?: Request | null,
+  res?: Response | null
+): Promise<IronSession<SessionData>> {
+  if (req && res) {
+    const session = await getIronSession<SessionData>(req, res, sessionOptions)
+    if (session.isLoggedIn === undefined) {
+      session.isLoggedIn = false
+    }
+    if (typeof process !== 'undefined' && process.env.NEXT_RUNTIME !== 'edge') {
+      if (session.isLoggedIn && session.instanceId !== getServerInstanceId()) {
+        session.isLoggedIn = false
+        session.userId = undefined
+        session.username = undefined
+        session.role = undefined
+        session.instanceId = undefined
+        await session.save()
+      }
+    }
+    return session
+  }
+
+  return getCachedServerSession()
 }
 

@@ -76,110 +76,120 @@ export default function AdminSettingsPage() {
     setSettings(prev => ({ ...prev, [key]: value }))
   }
 
-  const cardStyle: React.CSSProperties = {
-    background: 'var(--color-card-bg)',
-    border: '1px solid var(--color-card-border)',
-    borderRadius: '12px',
-    padding: '1.5rem',
-    marginBottom: '1.5rem',
-  }
-
-  const sectionTitle = (icon: string, title: string) => (
-    <h2 style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', margin: '0 0 1.5rem 0', fontSize: '1.1rem', fontWeight: 600, color: 'var(--color-text-primary)', paddingBottom: '1rem', borderBottom: '1px solid var(--color-card-border)' }}>
-      <span style={{ color: '#818cf8' }}><Icon name={icon} size={20} /></span>
-      {title}
-    </h2>
-  )
-
-  const fieldRow = (label: string, desc: string, children: React.ReactNode) => (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', padding: '1rem 0', borderBottom: '1px solid rgba(255,255,255,0.04)' }}>
-      <div style={{ flex: 1, paddingRight: '2rem' }}>
-        <div style={{ fontSize: '0.9rem', color: 'var(--color-text-primary)', fontWeight: 500, marginBottom: '0.2rem' }}>{label}</div>
-        <div style={{ fontSize: '0.8rem', color: 'var(--color-text-muted)', lineHeight: 1.5 }}>{desc}</div>
+  const sectionHeader = (icon: string, title: string, subtitle: string) => (
+    <div style={{ marginBottom: '1.25rem', paddingBottom: '0.85rem', borderBottom: '1px solid var(--zentra-border-subtle)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+        <Icon name={icon} size={20} style={{ color: '#2563eb' }} />
+        <h2 style={{ fontSize: '1.15rem', fontWeight: 700, margin: 0, color: 'var(--zentra-text-primary)' }}>{title}</h2>
       </div>
-      <div style={{ flexShrink: 0 }}>{children}</div>
+      <p style={{ fontSize: '0.825rem', color: 'var(--zentra-text-muted)', margin: '0.25rem 0 0 0' }}>{subtitle}</p>
     </div>
   )
 
-  const selectStyle: React.CSSProperties = {
-    background: 'var(--color-bg-secondary)', color: 'var(--color-text-primary)',
-    border: '1px solid var(--color-card-border)', borderRadius: '8px',
-    padding: '0.5rem 0.75rem', fontSize: '0.875rem', minWidth: '160px',
-  }
-
-  const inputStyle: React.CSSProperties = {
-    background: 'var(--color-bg-secondary)', color: 'var(--color-text-primary)',
-    border: '1px solid var(--color-card-border)', borderRadius: '8px',
-    padding: '0.5rem 0.75rem', fontSize: '0.875rem', width: '80px', textAlign: 'right',
-  }
-
-  const statusDot = (ok: boolean) => (
-    <span style={{ color: ok ? '#10b981' : '#ef4444', fontWeight: 600, fontSize: '0.875rem' }}>
-      {ok ? '● Configured' : '● Not configured'}
-    </span>
+  const settingRow = (label: string, desc: string, children: React.ReactNode) => (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '1rem 0', borderBottom: '1px solid var(--zentra-border-subtle)', gap: '1.5rem', flexWrap: 'wrap' }}>
+      <div style={{ flex: 1, minWidth: '220px' }}>
+        <div style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--zentra-text-primary)' }}>{label}</div>
+        <div style={{ fontSize: '0.8rem', color: 'var(--zentra-text-muted)', marginTop: '0.2rem' }}>{desc}</div>
+      </div>
+      <div>{children}</div>
+    </div>
   )
 
   if (loading) {
     return (
-      <div style={{ maxWidth: '900px', margin: '0 auto', padding: '2rem' }}>
-        <div style={{ color: 'var(--color-text-muted)', textAlign: 'center', paddingTop: '4rem' }}>Loading settings...</div>
+      <div className="zentra-page-container">
+        <div className="zentra-card" style={{ padding: '4rem', textAlign: 'center', color: 'var(--zentra-text-muted)' }}>
+          <Icon name="settings" size={32} style={{ marginBottom: '0.75rem', color: '#2563eb' }} />
+          <div>Loading platform configuration...</div>
+        </div>
       </div>
     )
   }
 
   return (
-    <div style={{ maxWidth: '900px', margin: '0 auto' }}>
-      <div style={{ marginBottom: '2rem' }}>
-        <h1 style={{ fontSize: '1.875rem', fontWeight: 700, margin: '0 0 0.5rem 0', color: 'var(--color-text-primary)' }}>Admin Settings</h1>
-        <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem', margin: 0 }}>
-          Configure application-wide settings. Changes are persisted to the database.
-        </p>
+    <div className="zentra-page-container" style={{ maxWidth: '1000px' }}>
+      {/* Header */}
+      <div className="zentra-page-header">
+        <div>
+          <div className="zentra-title-row">
+            <h1 className="zentra-page-title">Admin Settings</h1>
+            <span className="zentra-link-bubble" title="System Configuration">
+              <Icon name="link" size={16} />
+            </span>
+          </div>
+          <p className="zentra-page-subtitle">Global parameters, session security, RAG hyperparameters, and diagnostic health.</p>
+        </div>
+
+        <div className="zentra-header-actions">
+          {saveStatus === 'success' && <span className="zentra-badge success">✓ Saved</span>}
+          {saveStatus === 'error' && <span className="zentra-badge danger">✗ Save error</span>}
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="zentra-btn zentra-btn-primary"
+          >
+            <Icon name="save" size={16} />
+            <span>{saving ? 'Saving...' : 'Save Settings'}</span>
+          </button>
+        </div>
       </div>
 
       {/* Section 1: Application Settings */}
-      <div style={cardStyle}>
-        {sectionTitle('settings', 'Application Settings')}
-        {fieldRow('Application Name', 'Displayed in the interface and emails.', (
+      <div className="zentra-card" style={{ marginBottom: '1.5rem' }}>
+        {sectionHeader('tune', 'General Platform Settings', 'Branding and application identity')}
+        {settingRow('Platform Name', 'Application name presented in emails and page titles', (
           <input
+            type="text"
             value={settings['app.name'] || 'SmartInterview'}
             onChange={e => set('app.name', e.target.value)}
-            style={{ ...inputStyle, width: '200px', textAlign: 'left' }}
+            className="zentra-input"
+            style={{ width: '220px' }}
           />
         ))}
       </div>
 
-      {/* Section 2: Authentication / Security */}
-      <div style={cardStyle}>
-        {sectionTitle('security', 'Authentication & Security')}
-        {fieldRow(
-          'Session Timeout (hours)',
-          'How long a user session remains active before requiring re-login.',
+      {/* Section 2: Security & Session */}
+      <div className="zentra-card" style={{ marginBottom: '1.5rem' }}>
+        {sectionHeader('security', 'Session & Authentication Security', 'Session timeouts and credential policies')}
+        {settingRow('Session Timeout (Hours)', 'Duration an authenticated session remains active before token rotation', (
           <input
-            type="number" min={1} max={168}
+            type="number"
+            min={1}
+            max={168}
             value={settings['auth.session_timeout_hours'] || '24'}
             onChange={e => set('auth.session_timeout_hours', e.target.value)}
-            style={inputStyle}
+            className="zentra-input"
+            style={{ width: '100px', textAlign: 'right' }}
           />
-        )}
-        {fieldRow(
-          'Session Secret',
-          'Configured via SESSION_SECRET environment variable. Never exposed here.',
-          <span style={{ color: 'var(--color-text-muted)', fontSize: '0.875rem' }}>••••••••••••••••</span>
-        )}
+        ))}
+        {settingRow('Session Encryption Secret', 'Protected server-side variable SESSION_SECRET', (
+          <span style={{ fontSize: '0.85rem', color: 'var(--zentra-text-muted)', fontFamily: 'monospace' }}>••••••••••••••••</span>
+        ))}
       </div>
 
       {/* Section 3: Interview Defaults */}
-      <div style={cardStyle}>
-        {sectionTitle('quiz', 'Interview Defaults')}
-        {fieldRow('Default Difficulty', 'Base difficulty for newly created interviews.', (
-          <select style={selectStyle} value={settings['interview.default_difficulty']} onChange={e => set('interview.default_difficulty', e.target.value)}>
+      <div className="zentra-card" style={{ marginBottom: '1.5rem' }}>
+        {sectionHeader('assignment', 'Interview Defaults', 'Base difficulty and mode presets for live sessions')}
+        {settingRow('Default Difficulty', 'Default tier pre-selected in new interviewer workspaces', (
+          <select
+            value={settings['interview.default_difficulty']}
+            onChange={e => set('interview.default_difficulty', e.target.value)}
+            className="zentra-select"
+            style={{ width: '180px' }}
+          >
             <option value="beginner">Beginner</option>
             <option value="medium">Medium</option>
             <option value="advanced">Advanced</option>
           </select>
         ))}
-        {fieldRow('Default Interview Type', 'Default interview mode for new sessions.', (
-          <select style={selectStyle} value={settings['interview.default_type']} onChange={e => set('interview.default_type', e.target.value)}>
+        {settingRow('Default Interview Type', 'Pre-selected assessment mode', (
+          <select
+            value={settings['interview.default_type']}
+            onChange={e => set('interview.default_type', e.target.value)}
+            className="zentra-select"
+            style={{ width: '180px' }}
+          >
             <option value="technical">Technical</option>
             <option value="behavioral">Behavioral</option>
             <option value="mixed">Mixed</option>
@@ -187,96 +197,110 @@ export default function AdminSettingsPage() {
         ))}
       </div>
 
-      {/* Section 4: RAG / Knowledge Base Settings */}
-      <div style={cardStyle}>
-        {sectionTitle('memory', 'RAG / Knowledge Base Settings')}
-        {fieldRow('RAG Enabled', 'Enable/disable RAG retrieval during interviews.', (
-          <select style={selectStyle} value={settings['rag.enabled']} onChange={e => set('rag.enabled', e.target.value)}>
+      {/* Section 4: RAG Hyperparameters */}
+      <div className="zentra-card" style={{ marginBottom: '1.5rem' }}>
+        {sectionHeader('memory', 'RAG & Vector Retrieval Hyperparameters', 'Fine-tune document chunking and pgvector search')}
+        {settingRow('RAG Engine State', 'Enable or suspend vector semantic retrieval globally', (
+          <select
+            value={settings['rag.enabled']}
+            onChange={e => set('rag.enabled', e.target.value)}
+            className="zentra-select"
+            style={{ width: '180px' }}
+          >
             <option value="true">Enabled</option>
             <option value="false">Disabled</option>
           </select>
         ))}
-        {fieldRow('Top K Results', 'Number of document chunks retrieved per RAG query (1–20).', (
-          <input type="number" min={1} max={20} value={settings['rag.top_k'] || '5'} onChange={e => set('rag.top_k', e.target.value)} style={inputStyle} />
+        {settingRow('Top-K Nearest Chunks', 'Number of relevant chunks passed to LLM context (1-20)', (
+          <input
+            type="number"
+            min={1}
+            max={20}
+            value={settings['rag.top_k'] || '5'}
+            onChange={e => set('rag.top_k', e.target.value)}
+            className="zentra-input"
+            style={{ width: '100px', textAlign: 'right' }}
+          />
         ))}
-        {fieldRow('Chunk Size (chars)', 'Characters per document chunk during indexing.', (
-          <input type="number" min={200} max={4000} step={100} value={settings['rag.chunk_size'] || '1200'} onChange={e => set('rag.chunk_size', e.target.value)} style={inputStyle} />
+        {settingRow('Chunk Size (Characters)', 'Document text segment target token length', (
+          <input
+            type="number"
+            min={200}
+            max={4000}
+            step={100}
+            value={settings['rag.chunk_size'] || '1200'}
+            onChange={e => set('rag.chunk_size', e.target.value)}
+            className="zentra-input"
+            style={{ width: '100px', textAlign: 'right' }}
+          />
         ))}
-        {fieldRow('Chunk Overlap (chars)', 'Overlap between consecutive document chunks.', (
-          <input type="number" min={0} max={800} step={50} value={settings['rag.chunk_overlap'] || '200'} onChange={e => set('rag.chunk_overlap', e.target.value)} style={inputStyle} />
-        ))}
-        {fieldRow('Embedding Model', 'Local sentence embedding model (read-only).', (
-          <span style={{ color: 'var(--color-text-muted)', fontSize: '0.875rem' }}>all-MiniLM-L6-v2 (384-dim, local)</span>
-        ))}
-        {fieldRow('Vector Store', 'Vector database backend (read-only).', (
-          <span style={{ color: 'var(--color-text-muted)', fontSize: '0.875rem' }}>pgvector (PostgreSQL)</span>
+        {settingRow('Chunk Overlap (Characters)', 'Contextual overlap margin between contiguous chunks', (
+          <input
+            type="number"
+            min={0}
+            max={800}
+            step={50}
+            value={settings['rag.chunk_overlap'] || '200'}
+            onChange={e => set('rag.chunk_overlap', e.target.value)}
+            className="zentra-input"
+            style={{ width: '100px', textAlign: 'right' }}
+          />
         ))}
       </div>
 
-      {/* Section 5: LLM Settings */}
-      <div style={cardStyle}>
-        {sectionTitle('auto_awesome', 'LLM Settings')}
-        {fieldRow('Default LLM Provider', 'Fallback provider when no user preference is set.', (
-          <select style={selectStyle} value={settings['llm.default_provider']} onChange={e => set('llm.default_provider', e.target.value)}>
-            <option value="gemini">Gemini</option>
-            <option value="groq">Groq</option>
-          </select>
+      {/* Section 5: LLM Defaults */}
+      <div className="zentra-card" style={{ marginBottom: '1.5rem' }}>
+        {sectionHeader('smart_toy', 'AI Provider & LLM Engine', 'Core primary model provider and automatic failover')}
+        {settingRow('Primary Engine', 'Primary language model provider (auto-fallback uses the other enabled provider)', (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <select
+              value={settings['llm.primary_provider'] || settings['llm.default_provider'] || 'gemini'}
+              onChange={e => {
+                set('llm.default_provider', e.target.value)
+                set('llm.primary_provider', e.target.value)
+              }}
+              className="zentra-select"
+              style={{ width: '160px' }}
+            >
+              <option value="gemini">Gemini</option>
+              <option value="groq">Groq</option>
+            </select>
+            <a
+              href="/admin/ai"
+              className="zentra-btn zentra-btn-secondary"
+              style={{ fontSize: '0.8rem', padding: '0.4rem 0.75rem', textDecoration: 'none' }}
+            >
+              Configure Keys &amp; Failover &rarr;
+            </a>
+          </div>
         ))}
-        {fieldRow(
-          'Gemini API Key',
-          'Configure via GEMINI_API_KEY environment variable. Never exposed here.',
-          systemInfo ? statusDot(systemInfo.geminiConfigured) : null
-        )}
-        {fieldRow(
-          'Groq API Key',
-          'Configure via GROQ_API_KEY environment variable. Never exposed here.',
-          systemInfo ? statusDot(systemInfo.groqConfigured) : null
-        )}
       </div>
 
-      {/* Section 6: System Information */}
+      {/* Section 6: Diagnostics */}
       {systemInfo && (
-        <div style={cardStyle}>
-          {sectionTitle('info', 'System Information')}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1rem' }}>
+        <div className="zentra-card" style={{ marginBottom: '2rem' }}>
+          {sectionHeader('info', 'System Diagnostics & Environment', 'Runtime server specifications and API connectivity')}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1rem', marginTop: '1rem' }}>
             {[
-              { label: 'Node.js Version', value: systemInfo.nodeVersion },
-              { label: 'Platform', value: systemInfo.platform },
-              { label: 'Environment', value: systemInfo.env },
-              { label: 'Database', value: systemInfo.databaseConfigured ? '● Connected' : '● Not connected' },
-              { label: 'Gemini API', value: systemInfo.geminiConfigured ? '● Configured' : '● Not configured' },
-              { label: 'Groq API', value: systemInfo.groqConfigured ? '● Configured' : '● Not configured' },
-            ].map(({ label, value }) => (
-              <div key={label} style={{
-                background: 'var(--color-bg-secondary)', borderRadius: '8px',
-                padding: '1rem', border: '1px solid var(--color-card-border)'
-              }}>
-                <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)', marginBottom: '0.35rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>{label}</div>
-                <div style={{ fontSize: '0.9rem', fontWeight: 500, color: value.startsWith('●') ? (value.includes('Connected') || value.includes('Configured') ? '#10b981' : '#ef4444') : 'var(--color-text-primary)', fontFamily: 'monospace' }}>{value}</div>
+              { label: 'Node.js Engine', value: systemInfo.nodeVersion },
+              { label: 'Host Platform', value: systemInfo.platform },
+              { label: 'Environment Mode', value: systemInfo.env },
+              { label: 'Database (Prisma)', value: systemInfo.databaseConfigured ? 'Connected' : 'Offline', ok: systemInfo.databaseConfigured },
+              { label: 'Gemini Provider', value: systemInfo.geminiConfigured ? 'Configured' : 'Missing Key', ok: systemInfo.geminiConfigured },
+              { label: 'Groq Provider', value: systemInfo.groqConfigured ? 'Configured' : 'Missing Key', ok: systemInfo.groqConfigured },
+            ].map(({ label, value, ok }) => (
+              <div key={label} style={{ background: 'var(--zentra-bg-muted)', borderRadius: '12px', padding: '1rem', border: '1px solid var(--zentra-border)' }}>
+                <div style={{ fontSize: '0.725rem', color: 'var(--zentra-text-muted)', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 600 }}>
+                  {label}
+                </div>
+                <div style={{ fontSize: '0.9rem', fontWeight: 600, color: ok !== undefined ? (ok ? '#10b981' : '#dc2626') : 'var(--zentra-text-primary)', marginTop: '0.25rem', fontFamily: 'monospace' }}>
+                  {value}
+                </div>
               </div>
             ))}
           </div>
         </div>
       )}
-
-      {/* Save Bar */}
-      <div style={{ display: 'flex', justifyContent: 'flex-end', alignItems: 'center', gap: '1rem', paddingBottom: '2rem' }}>
-        {saveStatus === 'success' && <span style={{ color: '#10b981', fontWeight: 500 }}>✓ Settings saved successfully</span>}
-        {saveStatus === 'error' && <span style={{ color: '#ef4444', fontWeight: 500 }}>✗ Failed to save settings</span>}
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          style={{
-            background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
-            color: 'white', border: 'none', borderRadius: '10px',
-            padding: '0.75rem 2rem', fontSize: '0.9rem', fontWeight: 500,
-            cursor: saving ? 'not-allowed' : 'pointer', opacity: saving ? 0.7 : 1,
-            boxShadow: '0 4px 14px rgba(99,102,241,0.25)',
-          }}
-        >
-          {saving ? 'Saving...' : 'Save Settings'}
-        </button>
-      </div>
     </div>
   )
 }

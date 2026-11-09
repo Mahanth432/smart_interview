@@ -110,6 +110,7 @@ export async function POST(request: Request) {
         userId: user.id,
         email: normalizedEmail,
         otpHash,
+        purpose: 'EMAIL_VERIFICATION',
         expiresAt: new Date(Date.now() + 5 * 60 * 1000),
         attempts: 0,
       },

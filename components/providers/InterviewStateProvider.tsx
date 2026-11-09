@@ -1,7 +1,6 @@
 'use client'
 
-import React, { createContext, useContext, useState, ReactNode, useEffect } from 'react'
-import Cookies from 'js-cookie'
+import React, { createContext, useContext, useState, ReactNode } from 'react'
 import { AppState, Candidate } from '@/types'
 import { candidatesData, recentSessionsData } from '@/data/mockData'
 
@@ -17,7 +16,6 @@ export const InterviewStateProvider = ({ children }: { children: ReactNode }) =>
   const [state, setState] = useState<AppState>({
     activeScreen: 'dashboard',
     currentInterviewer: 'System Admin',
-    selectedLLM: 'gemini', // Default, will be updated by useEffect
     difficulty: 'intermediate',
     isVoiceActive: false,
     isRecording: false,
@@ -27,24 +25,6 @@ export const InterviewStateProvider = ({ children }: { children: ReactNode }) =>
     allGeneratedFollowUps: [],
     recentSessions: recentSessionsData
   })
-
-  // Keep cookie in sync with state changes
-  useEffect(() => {
-    if (state.selectedLLM) {
-      Cookies.set('selectedLLM', state.selectedLLM, { expires: 365, path: '/' });
-    }
-  }, [state.selectedLLM]);
-
-  // Synchronize initial state with cookies
-  useEffect(() => {
-    const savedLLM = Cookies.get('selectedLLM');
-    if (savedLLM === 'groq' || savedLLM === 'gemini') {
-      setState(prev => ({ ...prev, selectedLLM: savedLLM }));
-    } else {
-      // Initialize cookie if missing
-      Cookies.set('selectedLLM', 'gemini', { expires: 365, path: '/' });
-    }
-  }, []);
 
   const activeCandidate = state.candidates[state.activeCandidateKey]
 

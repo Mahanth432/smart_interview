@@ -32,19 +32,26 @@ export const ScoreChart = () => {
     labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
     datasets: [
       {
-        label: 'Avg Candidate Score',
+        label: 'Candidate Score',
         data: [72, 75, 78, 85, 82, 88, 89],
-        borderColor: '#6366f1', // var(--color-indigo)
-        backgroundColor: 'rgba(99, 102, 241, 0.1)',
-        borderWidth: 2,
-        pointBackgroundColor: '#06b6d4', // var(--color-cyan)
-        pointBorderColor: '#fff',
+        borderColor: '#2563eb',
+        backgroundColor: (context: { chart: { ctx: CanvasRenderingContext2D } }) => {
+          const ctx = context.chart.ctx
+          const gradient = ctx.createLinearGradient(0, 0, 0, 240)
+          gradient.addColorStop(0, 'rgba(37, 99, 235, 0.22)')
+          gradient.addColorStop(1, 'rgba(37, 99, 235, 0.0)')
+          return gradient
+        },
+        borderWidth: 2.5,
+        pointBackgroundColor: '#2563eb',
+        pointBorderColor: '#ffffff',
+        pointBorderWidth: 2,
         pointRadius: 4,
         pointHoverRadius: 6,
         fill: true,
-        tension: 0.4
-      }
-    ]
+        tension: 0.4,
+      },
+    ],
   }
 
   const options = {
@@ -52,43 +59,45 @@ export const ScoreChart = () => {
     maintainAspectRatio: false,
     plugins: {
       legend: {
-        display: false
+        display: false,
       },
       tooltip: {
-        backgroundColor: 'rgba(15, 22, 42, 0.9)',
-        titleColor: '#fff',
-        bodyColor: '#94a3b8',
-        borderColor: 'rgba(255,255,255,0.1)',
-        borderWidth: 1,
+        backgroundColor: '#0f172a',
+        titleColor: '#ffffff',
+        bodyColor: '#cbd5e1',
         padding: 10,
+        cornerRadius: 8,
         displayColors: false,
         callbacks: {
           label: function(context: { parsed: { y: number | null } }) {
-            return `Score: ${context.parsed.y ?? 0}`;
-          }
-        }
-      }
+            return `Score: ${context.parsed.y ?? 0}%`;
+          },
+        },
+      },
     },
     scales: {
       y: {
         beginAtZero: true,
         max: 100,
+        border: { dash: [4, 4] },
         grid: {
-          color: 'rgba(255, 255, 255, 0.05)',
+          color: 'rgba(226, 232, 240, 0.6)',
         },
         ticks: {
-          color: 'var(--color-text-muted)',
-          stepSize: 20
-        }
+          color: '#94a3b8',
+          stepSize: 20,
+          font: { size: 11, family: 'Inter' },
+        },
       },
       x: {
         grid: {
           display: false,
         },
         ticks: {
-          color: 'var(--color-text-muted)'
-        }
-      }
+          color: '#94a3b8',
+          font: { size: 11, family: 'Inter' },
+        },
+      },
     },
     interaction: {
       intersect: false,

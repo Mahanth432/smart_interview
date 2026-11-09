@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
 import prisma from '@/lib/db';
-import { generateSecureOtp, hashOtp } from '@/lib/otp';
+import { generateSecureOtp, hashOtp, OTP_COOLDOWN_SECONDS } from '@/lib/otp';
 import { sendOtpEmail } from '@/lib/mail';
+import { createAuditLog } from '@/lib/audit-log';
 
 const PASSWORD_MIN_LENGTH = 8;
 
@@ -64,6 +65,70 @@ export async function POST(request: Request) {
     });
 
     if (existing) {
+      // If the existing account is unverified and has matching role, allow re-registration
+      // by sending a new OTP (idempotent — don't create a duplicate user)
+      if (!existing.emailVerified && existing.role === assignedRole) {
+        // Update the password hash in case they forgot it
+        const passwordHash = await bcrypt.hash(password, 12);
+        await prisma.user.update({
+          where: { id: existing.id },
+          data: { passwordHash, name: nameInput },
+        });
+
+        // Rate limit: check cooldown
+        const recentOtp = await prisma.otpVerification.findFirst({
+          where: {
+            email: emailInput,
+            purpose: 'EMAIL_VERIFICATION',
+            createdAt: { gt: new Date(Date.now() - OTP_COOLDOWN_SECONDS * 1000) },
+          },
+          orderBy: { createdAt: 'desc' },
+        });
+
+        if (recentOtp) {
+          return NextResponse.json(
+            { error: 'A verification code was recently sent. Please check your email or wait before retrying.' },
+            { status: 429 }
+          );
+        }
+
+        // Invalidate old OTPs
+        await prisma.otpVerification.updateMany({
+          where: { email: emailInput, usedAt: null, purpose: 'EMAIL_VERIFICATION' },
+          data: { usedAt: new Date() },
+        });
+
+        // Generate new OTP
+        const otp = generateSecureOtp();
+        const otpHash = hashOtp(otp);
+        await prisma.otpVerification.create({
+          data: {
+            userId: existing.id,
+            email: emailInput,
+            otpHash,
+            purpose: 'EMAIL_VERIFICATION',
+            expiresAt: new Date(Date.now() + 5 * 60 * 1000),
+            attempts: 0,
+          },
+        });
+
+        const emailSent = await sendOtpEmail({ email: emailInput, otp, role: assignedRole });
+        if (!emailSent && process.env.NODE_ENV === 'production') {
+          return NextResponse.json({ error: 'Failed to send verification email. Please try again.' }, { status: 500 });
+        }
+
+        return NextResponse.json(
+          {
+            success: true,
+            otpRequired: true,
+            email: emailInput,
+            role: assignedRole,
+            message: 'A verification code has been sent to your email.',
+          },
+          { status: 200 }
+        );
+      }
+
       return NextResponse.json(
         { error: 'An account with this email already exists. Please log in.' },
         { status: 409 }
@@ -73,13 +138,15 @@ export async function POST(request: Request) {
     // Hash the password
     const passwordHash = await bcrypt.hash(password, 12);
 
-    // Create user with passwordHash
+    // Create user with emailVerified = false (pending verification)
     const newUser = await prisma.user.create({
       data: {
         username: emailInput,
         email: emailInput,
+        name: nameInput,
         passwordHash,
         role: assignedRole,
+        emailVerified: false,
       },
     });
 
@@ -94,7 +161,7 @@ export async function POST(request: Request) {
       });
     }
 
-    // Generate and send initial OTP for immediate email verification
+    // Generate and send OTP for email verification
     const otp = generateSecureOtp();
     const otpHash = hashOtp(otp);
 
@@ -103,20 +170,26 @@ export async function POST(request: Request) {
         userId: newUser.id,
         email: emailInput,
         otpHash,
+        purpose: 'EMAIL_VERIFICATION',
         expiresAt: new Date(Date.now() + 5 * 60 * 1000),
         attempts: 0,
       },
     });
 
-    try {
-      await sendOtpEmail({
-        email: emailInput,
-        otp,
-        role: assignedRole,
-      });
-    } catch (mailErr) {
-      console.error('Failed to send initial OTP on registration:', mailErr);
+    const emailSent = await sendOtpEmail({ email: emailInput, otp, role: assignedRole });
+    if (!emailSent && process.env.NODE_ENV === 'production') {
+      // In production, if email fails, don't leave an unverifiable account
+      // The account stays unverified — user can retry registration
+      return NextResponse.json({ error: 'Failed to send verification email. Please try again.' }, { status: 500 });
     }
+
+    createAuditLog({
+      userId: newUser.id,
+      username: newUser.username,
+      action: 'USER_REGISTERED',
+      status: 'SUCCESS',
+      metadata: { role: assignedRole, email: emailInput },
+    });
 
     return NextResponse.json(
       {

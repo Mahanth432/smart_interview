@@ -12,6 +12,9 @@ export async function POST(request: Request) {
     if (!session?.isLoggedIn || !session.userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+    if (session.role === 'CANDIDATE') {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
 
     const body = await request.json()
     const query = typeof body.query === 'string' ? body.query.trim() : ''
@@ -45,17 +48,18 @@ ${query}
 Answer:
 `
 
-    // 4. Send prompt to Gemini
-    const forceProvider = typeof body.forceProvider === 'string' ? body.forceProvider : undefined
-    const { cookies } = await import("next/headers");
-    const cookieStore = await cookies();
-    console.log(`[LLM DEBUG] selectedLLM=${cookieStore.get("selectedLLM")?.value}`);
-    const { text: answer, provider } = await generateLLMResponse(prompt, forceProvider)
+    // 4. Send prompt to centrally managed LLM with automatic failover
+    // Only ADMIN users can specify a forced provider for controlled testing
+    const adminForcedProvider =
+      session.role === 'ADMIN' && typeof body.forceProvider === 'string' && (body.forceProvider === 'gemini' || body.forceProvider === 'groq')
+        ? body.forceProvider
+        : undefined
+
+    const { text: answer } = await generateLLMResponse(prompt, adminForcedProvider)
 
     return NextResponse.json({
       success: true,
       answer,
-      provider,
       sources: results
     })
   } catch (err) {

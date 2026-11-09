@@ -5,68 +5,129 @@ import { ScoreChartWrapper } from '@/components/dashboard/ScoreChartWrapper'
 import Icon from '@/components/Icon'
 import prisma from '@/lib/db'
 import { getAppSession } from '@/lib/auth'
+import Link from 'next/link'
+
+export const dynamic = 'force-dynamic'
 
 export default async function DashboardPage() {
-  const session = await getAppSession();
-  const userId = session.userId;
+  const t0 = performance.now()
+  const session = await getAppSession()
+  const tSession = performance.now()
+  const userId = session.userId
 
   if (!userId) {
-    return <div>Unauthorized</div>;
+    return <div style={{ padding: '2rem', color: 'var(--zentra-text-primary)' }}>Unauthorized</div>
   }
 
-  // Fetch real data from DB in parallel
-  const [totalSessions, completedSessions, activeSessions, recentSessions] = await Promise.all([
+  // Fetch real interviewer data from DB in parallel
+  const tQuery0 = performance.now()
+  const [totalSessions, completedSessions, activeSession, recentSessions, scoreAgg] = await Promise.all([
     prisma.interviewSession.count({ where: { interviewerId: userId } }),
     prisma.interviewSession.count({ where: { status: 'completed', interviewerId: userId } }),
-    prisma.interviewSession.findMany({ where: { status: 'active', interviewerId: userId }, include: { candidate: true } }),
+    prisma.interviewSession.findFirst({
+      where: { status: 'active', interviewerId: userId },
+      select: {
+        id: true,
+        candidate: { select: { name: true } },
+      },
+    }),
     prisma.interviewSession.findMany({
       where: { interviewerId: userId },
       orderBy: { startedAt: 'desc' },
-      take: 5,
-      include: { candidate: true, report: true }
-    })
+      take: 6,
+      select: {
+        id: true,
+        interviewType: true,
+        startedAt: true,
+        score: true,
+        status: true,
+        candidate: { select: { name: true } },
+      },
+    }),
+    prisma.interviewSession.aggregate({
+      where: { interviewerId: userId, score: { not: null } },
+      _avg: { score: true },
+    }),
   ])
+  const tQueryEnd = performance.now()
+
+  const avgScore = scoreAgg._avg.score !== null ? Math.round(scoreAgg._avg.score * 10) / 10 : null
+
+  if (process.env.NODE_ENV === 'development') {
+    console.log(`[DEV TIMING] DashboardPage: session=${(tSession - t0).toFixed(1)}ms, queries=${(tQueryEnd - tQuery0).toFixed(1)}ms, total=${(performance.now() - t0).toFixed(1)}ms`)
+  }
 
   return (
-    <section className="screen active" style={{ padding: '1.5rem 2rem', maxWidth: '1600px', margin: '0 auto' }}>
-      <div className="dashboard-header-flex" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '2rem' }}>
+    <div className="zentra-page-container">
+      {/* Header: Overview 🔗 + Date pill + New Session button */}
+      <div className="zentra-page-header">
         <div>
-          <h2 style={{ fontSize: '1.75rem', fontWeight: 600, color: 'var(--color-text-primary)', margin: 0 }}>Overview Hub</h2>
-          <p style={{ color: 'var(--color-text-muted)', fontSize: '0.9rem', marginTop: '0.35rem' }}>Global metrics, recent interview sessions, and system health.</p>
+          <div className="zentra-title-row">
+            <h1 className="zentra-page-title">Overview</h1>
+            <span className="zentra-link-bubble" title="Interviewer Hub">
+              <Icon name="link" size={16} />
+            </span>
+          </div>
+          <p className="zentra-page-subtitle">Your candidate evaluation velocity, scoring distributions, and active interviews.</p>
         </div>
-        <div style={{ display: 'flex', gap: '0.75rem' }}>
-          <button style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'var(--color-bg-secondary)', color: 'var(--color-text-primary)', border: '1px solid var(--color-card-border)', borderRadius: '8px', padding: '0.6rem 1.25rem', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 500 }}>
-            <Icon name="download" size={16} />
-            Export Data
-          </button>
-          <a href="/interview" style={{ textDecoration: 'none', display: 'flex', alignItems: 'center', gap: '0.5rem', background: 'linear-gradient(135deg, #6366f1, #8b5cf6)', color: 'var(--color-text-primary)', border: 'none', borderRadius: '8px', padding: '0.6rem 1.25rem', cursor: 'pointer', fontSize: '0.875rem', fontWeight: 500, boxShadow: '0 4px 14px 0 rgba(99, 102, 241, 0.39)' }}>
-            <Icon name="add" size={18} />
-            New Session
-          </a>
+
+        <div className="zentra-header-actions">
+          <div className="zentra-date-pill">
+            <Icon name="calendar_today" size={15} style={{ color: 'var(--zentra-text-muted)' }} />
+            <span>Real-time Workspace</span>
+            <span className="zentra-compare-label">live DB</span>
+          </div>
+          <Link href="/interview" className="zentra-btn zentra-btn-primary">
+            <Icon name="add" size={16} />
+            <span>New Session</span>
+          </Link>
         </div>
       </div>
 
-      <DashboardStats 
-        totalSessions={totalSessions} 
-        completedSessions={completedSessions} 
-        activeSession={activeSessions[0]} 
+      {/* Top 4 Stats Cards */}
+      <DashboardStats
+        totalSessions={totalSessions}
+        completedSessions={completedSessions}
+        activeSession={activeSession}
+        averageScore={avgScore}
       />
 
-      <div className="dashboard-main-grid" style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '1.5rem', marginTop: '2rem' }}>
-        <RecentInterviews sessions={recentSessions} />
+      {/* Main Grid: Score Trend on Left + Recent Interviews on Right */}
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: '1.5rem', marginBottom: '1.75rem' }}>
+        {/* Left: Score Trend Chart & AI Prompt Bar */}
+        <div className="zentra-card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
+          <div>
+            <div className="zentra-card-header">
+              <div>
+                <h2 className="zentra-card-title">Candidate Evaluation Trend</h2>
+                <span style={{ fontSize: '0.8rem', color: 'var(--zentra-text-muted)' }}>Average technical competency performance</span>
+              </div>
+              <span className="zentra-dot-menu">&bull;&bull;&bull;</span>
+            </div>
 
-        <div style={{ background: 'var(--color-card-bg)', border: '1px solid var(--color-card-border)', borderRadius: '16px', display: 'flex', flexDirection: 'column', height: '100%', minHeight: '400px' }}>
-          <div style={{ padding: '1.5rem', borderBottom: '1px solid var(--color-card-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <h3 style={{ margin: 0, fontSize: '1.1rem', color: 'var(--color-text-primary)', fontWeight: 500 }}>Average Candidate Score Trend</h3>
-            <div style={{ color: 'var(--color-text-muted)', cursor: 'pointer' }}><Icon name="more_vert" /></div>
-          </div>
-          <div style={{ flex: 1, padding: '1.5rem', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <div style={{ width: '100%', height: '100%', minHeight: '300px' }}>
+            <div style={{ minHeight: '280px', width: '100%' }}>
               <ScoreChartWrapper />
             </div>
           </div>
+
+          {/* Zentra Assistant Exploration Bar */}
+          <div className="zentra-prompt-bar">
+            <div className="zentra-prompt-title">
+              <Icon name="smart_toy" size={16} />
+              <span>What would you like to explore next?</span>
+            </div>
+            <div className="zentra-prompt-input-box">
+              <span style={{ color: 'var(--zentra-text-dim)' }}>&gt;</span>
+              <span>Generate customized Python &amp; System Design questions from synced syllabus</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Right: Recent Interviews List */}
+        <div>
+          <RecentInterviews sessions={recentSessions} />
         </div>
       </div>
-    </section>
+    </div>
   )
 }

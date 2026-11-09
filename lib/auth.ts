@@ -49,7 +49,7 @@ const getCachedServerSession = cache(async (): Promise<IronSession<SessionData>>
     session.isLoggedIn = false
   }
 
-  if (typeof process !== 'undefined' && process.env.NEXT_RUNTIME !== 'edge') {
+  if (process.env.NODE_ENV === 'development' && typeof process !== 'undefined' && process.env.NEXT_RUNTIME !== 'edge') {
     if (session.isLoggedIn && session.instanceId !== getServerInstanceId()) {
       session.isLoggedIn = false
       session.userId = undefined
@@ -78,7 +78,7 @@ export async function getAppSession(
     if (session.isLoggedIn === undefined) {
       session.isLoggedIn = false
     }
-    if (typeof process !== 'undefined' && process.env.NEXT_RUNTIME !== 'edge') {
+    if (process.env.NODE_ENV === 'development' && typeof process !== 'undefined' && process.env.NEXT_RUNTIME !== 'edge') {
       if (session.isLoggedIn && session.instanceId !== getServerInstanceId()) {
         session.isLoggedIn = false
         session.userId = undefined

@@ -75,10 +75,11 @@ export default function LoginPage() {
         setLegacyEmail(data.email || trimmedInput)
         setRequiresPasswordSetup(true)
         setError('')
+        setIsLoading(false)
         return
       }
 
-      if (!res.ok) {
+      if (!res.ok || !data.success) {
         throw new Error(data.error || 'Invalid username/email or password.')
       }
 
@@ -86,9 +87,9 @@ export default function LoginPage() {
       setSuccessMsg('Sign in successful. Redirecting to workspace…')
       const targetUrl = data.redirect || '/dashboard'
       router.push(targetUrl)
+      router.refresh()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Invalid credentials. Please try again.')
-    } finally {
       setIsLoading(false)
     }
   }

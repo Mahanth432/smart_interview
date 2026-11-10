@@ -3,10 +3,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Icon from '@/components/Icon';
-
-interface SpeechRecognizerInstance {
-  stop: () => void;
-}
+import {
+  MAX_TRANSCRIBE_AUDIO_BYTES,
+  resolveRecordingFilename,
+} from '@/lib/audio/validation';
 
 interface CandidateOption {
   id: string;
@@ -90,9 +90,9 @@ export default function InterviewPage() {
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [recordingDuration, setRecordingDuration] = useState(0);
   const [micError, setMicError] = useState<string | null>(null);
+  const [sttInfo, setSttInfo] = useState<{ language: string | null; duration: number | null; processingMs: number | null } | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const speechRecognizerRef = useRef<SpeechRecognizerInstance | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
@@ -311,6 +311,8 @@ export default function InterviewPage() {
       } else if (evalData.nextQuestion) {
         setCurrentQuestion(evalData.nextQuestion);
         setTextAnswer("");
+        setSttInfo(null);
+        setMicError(null);
         setSuggestedQuestions([]);
       } else {
         setSuggestedQuestions([{ question: "Can you elaborate on a practical example of your solution?", difficulty: "medium" }]);
@@ -340,6 +342,8 @@ export default function InterviewPage() {
         setCurrentQuestion(data.question);
         setSuggestedQuestions([]);
         setTextAnswer("");
+        setSttInfo(null);
+        setMicError(null);
       } else {
         alert("Failed to load question: " + data.error);
       }
@@ -379,7 +383,14 @@ export default function InterviewPage() {
 
   // Audio Recording / Whisper STT Integration
   const getSupportedMimeType = () => {
-    const types = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/ogg', 'audio/wav'];
+    const types = [
+      'audio/webm;codecs=opus',
+      'audio/webm',
+      'audio/ogg;codecs=opus',
+      'audio/ogg',
+      'audio/mp4',
+      'audio/wav',
+    ];
     for (const t of types) {
       if (typeof MediaRecorder !== 'undefined' && MediaRecorder.isTypeSupported(t)) {
         return t;
@@ -391,96 +402,110 @@ export default function InterviewPage() {
   const startRecording = async () => {
     if (isProcessing || isRecording || isTranscribing) return;
     setMicError(null);
+    setSttInfo(null);
 
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-      setMicError("Audio recording not supported in this browser. Please type the answer manually.");
+      setMicError("Audio recording not supported in this browser. Please type your answer manually.");
       return;
     }
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const mimeType = getSupportedMimeType();
-      const options = mimeType ? { mimeType } : undefined;
+      let mediaRecorder: MediaRecorder;
+      try {
+        const options: MediaRecorderOptions = { audioBitsPerSecond: 32_000 };
+        if (mimeType) options.mimeType = mimeType;
+        mediaRecorder = new MediaRecorder(stream, options);
+      } catch {
+        mediaRecorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream);
+      }
 
-      const mediaRecorder = new MediaRecorder(stream, options);
       mediaRecorderRef.current = mediaRecorder;
       chunksRef.current = [];
-
-      let liveSpeechCaptured = false;
-      const win = window as unknown as Record<string, unknown>;
-      const SpeechRecognition = (win.SpeechRecognition || win.webkitSpeechRecognition) as { new (): { continuous: boolean; interimResults: boolean; lang: string; start: () => void; stop: () => void; onresult: ((event: { resultIndex: number; results: Array<Array<{ transcript: string }>> }) => void) | null } } | undefined;
-
-      if (SpeechRecognition) {
-        try {
-          const recognizer = new SpeechRecognition();
-          recognizer.continuous = true;
-          recognizer.interimResults = true;
-          recognizer.lang = 'en-US';
-          const initialText = textAnswer;
-
-          recognizer.onresult = (event: { resultIndex: number; results: Array<Array<{ transcript: string }>> }) => {
-            let finalTranscript = '';
-            for (let i = event.resultIndex; i < event.results.length; ++i) {
-              finalTranscript += event.results[i][0].transcript;
-            }
-            if (finalTranscript.trim()) {
-              liveSpeechCaptured = true;
-              setTextAnswer(() => {
-                const base = initialText ? initialText.trim() + ' ' : '';
-                return base + finalTranscript.trim();
-              });
-            }
-          };
-          recognizer.start();
-          speechRecognizerRef.current = recognizer;
-        } catch {
-          // ignore SpeechRecognition init errors
-        }
-      }
 
       mediaRecorder.ondataavailable = (e) => {
         if (e.data && e.data.size > 0) chunksRef.current.push(e.data);
       };
 
       mediaRecorder.onstop = async () => {
-        clearInterval(timerRef.current as NodeJS.Timeout);
+        if (timerRef.current) {
+          clearInterval(timerRef.current);
+          timerRef.current = null;
+        }
         setRecordingDuration(0);
         setIsRecording(false);
         stream.getTracks().forEach((track) => track.stop());
 
-        if (speechRecognizerRef.current) {
-          try {
-            speechRecognizerRef.current.stop();
-          } catch {}
-          speechRecognizerRef.current = null;
-        }
+        const recordedType = mediaRecorder.mimeType || mimeType || chunksRef.current[0]?.type || 'audio/webm';
+        const audioBlob = new Blob(chunksRef.current, { type: recordedType });
+        chunksRef.current = [];
 
-        if (liveSpeechCaptured && textAnswer.trim().length > 0) {
+        if (audioBlob.size <= 0) {
+          setMicError("No audio was captured. Please try again or type your answer manually.");
           return;
         }
 
-        const audioBlob = new Blob(chunksRef.current, { type: mimeType || 'audio/webm' });
-        if (audioBlob.size < 1000) return;
+        if (audioBlob.size < 1000) {
+          setMicError("Recording was too short. Please speak longer or type your answer manually.");
+          return;
+        }
+
+        if (audioBlob.size > MAX_TRANSCRIBE_AUDIO_BYTES) {
+          setMicError("Recording exceeds the 4 MB upload limit. Please record a shorter segment or enter your answer manually.");
+          return;
+        }
 
         setIsTranscribing(true);
         try {
+          const filename = resolveRecordingFilename(recordedType);
           const formData = new FormData();
-          formData.append('audio', audioBlob, 'recording.webm');
+          formData.append('audio', audioBlob, filename);
 
-          const response = await fetch('/api/interview/transcribe', {
-            method: 'POST',
-            body: formData,
-          });
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 50_000);
 
-          const data = await response.json();
-          if (data.transcript && data.transcript.trim()) {
+          let response: Response;
+          try {
+            response = await fetch('/api/interview/transcribe', {
+              method: 'POST',
+              body: formData,
+              signal: controller.signal,
+            });
+          } finally {
+            clearTimeout(timeoutId);
+          }
+
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            setMicError(
+              data.error ||
+                "Speech-to-text transcription failed. You can continue by typing the answer manually."
+            );
+            return;
+          }
+
+          const transcriptText = typeof data.transcript === 'string' ? data.transcript.trim() : '';
+          if (transcriptText) {
             setTextAnswer((prev) => {
               const base = prev ? prev.trim() + ' ' : '';
-              return base + data.transcript.trim();
+              return base + transcriptText;
             });
+            setSttInfo({
+              language: typeof data.language === 'string' ? data.language : null,
+              duration: typeof data.duration === 'number' ? data.duration : null,
+              processingMs: typeof data.processingMs === 'number' ? data.processingMs : null,
+            });
+          } else {
+            setMicError("No clear speech was detected in the recording. Please retry or type manually.");
           }
-        } catch (err) {
-          console.error("Transcription error:", err);
+        } catch (err: unknown) {
+          const isAbort = err instanceof Error && err.name === 'AbortError';
+          setMicError(
+            isAbort
+              ? "Transcription timed out. You can enter the candidate's answer manually below."
+              : "Unable to reach speech-to-text service. You can type the candidate's answer manually."
+          );
         } finally {
           setIsTranscribing(false);
         }
@@ -778,7 +803,9 @@ export default function InterviewPage() {
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <label style={{ color: 'var(--zentra-text-primary)', fontSize: '0.875rem', fontWeight: 600 }}>Candidate Response &amp; Transcript</label>
-                    <span style={{ color: 'var(--zentra-text-muted)', fontSize: '0.75rem' }}>Ask candidate and record or type response</span>
+                    <span style={{ color: 'var(--zentra-text-muted)', fontSize: '0.75rem' }}>
+                      English &amp; Hindi supported (review transcript). Telugu STT is experimental; manual typing recommended.
+                    </span>
                   </div>
 
                   <textarea
@@ -789,6 +816,21 @@ export default function InterviewPage() {
                     className="zentra-input"
                     style={{ minHeight: '140px', resize: 'vertical', lineHeight: 1.6 }}
                   />
+
+                  {sttInfo && (
+                    <div style={{ fontSize: '0.78rem', color: 'var(--zentra-text-muted)', display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
+                      <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
+                        {sttInfo.language && <span>Detected language: <strong style={{ textTransform: 'uppercase' }}>{sttInfo.language}</strong></span>}
+                        {typeof sttInfo.duration === 'number' && <span>Audio length: <strong>{sttInfo.duration.toFixed(1)}s</strong></span>}
+                        {typeof sttInfo.processingMs === 'number' && <span>Transcribed in <strong>{(sttInfo.processingMs / 1000).toFixed(2)}s</strong></span>}
+                      </div>
+                      {sttInfo.language?.toLowerCase() === 'te' && (
+                        <div style={{ color: '#b45309', fontWeight: 500 }}>
+                          Telugu transcript is experimental — please review and edit.
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {micError && (
                     <div style={{ padding: '0.6rem 1rem', borderRadius: '12px', background: 'rgba(239, 68, 68, 0.08)', color: '#dc2626', fontSize: '0.825rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -828,7 +870,7 @@ export default function InterviewPage() {
 
                       {textAnswer.trim().length > 0 && !isRecording && !isTranscribing && (
                         <button
-                          onClick={() => setTextAnswer('')}
+                          onClick={() => { setTextAnswer(''); setSttInfo(null); setMicError(null); }}
                           type="button"
                           className="zentra-btn zentra-btn-secondary"
                           style={{ padding: '0.45rem 0.85rem', fontSize: '0.8rem' }}

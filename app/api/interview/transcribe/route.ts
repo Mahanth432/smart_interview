@@ -1,169 +1,192 @@
-import { NextRequest, NextResponse } from "next/server";
-import { getAppSession } from "@/lib/auth";
+import { NextRequest, NextResponse } from 'next/server'
+import { getAppSession } from '@/lib/auth'
+import {
+  MAX_TRANSCRIBE_REQUEST_BYTES,
+  validateAudioUpload,
+} from '@/lib/audio/validation'
+
+export const maxDuration = 60
+
+const WHISPER_REQUEST_TIMEOUT_MS = 45_000
+
+function isProductionRuntime(): boolean {
+  return Boolean(process.env.VERCEL || process.env.VERCEL_ENV || process.env.NODE_ENV === 'production')
+}
+
+function resolveWhisperServiceUrl(): string | null {
+  const configured = (process.env.WHISPER_SERVICE_URL || '').trim().replace(/\/+$/, '')
+  if (configured) {
+    return configured
+  }
+  if (!isProductionRuntime()) {
+    return 'http://127.0.0.1:8000'
+  }
+  return null
+}
+
+function sanitizeUpstreamMessage(raw: unknown, fallback: string): string {
+  if (typeof raw !== 'string' || !raw.trim()) return fallback
+  return raw
+    .replace(/postgres(ql)?:\/\/[^\s]+/gi, '<redacted>')
+    .replace(/https?:\/\/[^\s]+/gi, '<redacted-url>')
+    .replace(/(secret|token|key|password|authorization)=([^\s&]+)/gi, '$1=<redacted>')
+    .trim()
+    .slice(0, 250)
+}
 
 export async function POST(req: NextRequest) {
   try {
-    const res = NextResponse.json({});
-    const session = await getAppSession(req as unknown as Request, res as unknown as Response);
+    const res = NextResponse.json({})
+    const session = await getAppSession(req as unknown as Request, res as unknown as Response)
 
     if (!session?.isLoggedIn || !session.userId) {
-      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
-    const formData = await req.formData();
-    const file = (formData.get("audio") || formData.get("file")) as File | null;
-
-    if (!file) {
-      return NextResponse.json({ error: "No audio file provided" }, { status: 400 });
+    // Reject oversized Content-Length upfront before reading FormData into memory
+    const contentLengthHeader = req.headers.get('content-length')
+    if (contentLengthHeader) {
+      const contentLength = Number(contentLengthHeader)
+      if (Number.isFinite(contentLength) && contentLength > MAX_TRANSCRIBE_REQUEST_BYTES) {
+        return NextResponse.json(
+          { error: 'Audio upload exceeds the 4 MB limit. Please record a shorter segment or enter manually.' },
+          { status: 413 }
+        )
+      }
     }
 
-    if (file.size > 10 * 1024 * 1024) {
-      return NextResponse.json({ error: "Audio file too large (max 10MB)" }, { status: 400 });
+    const formData = await req.formData()
+    const file = (formData.get('audio') || formData.get('file')) as File | null
+
+    if (!file || typeof file === 'string') {
+      return NextResponse.json({ error: 'No audio file provided' }, { status: 400 })
     }
 
-    // Fail-closed verification: WHISPER_API_SECRET is strictly required in ALL environments
-    const whisperSecret = process.env.WHISPER_API_SECRET?.trim();
+    const validation = validateAudioUpload(file)
+    if (!validation.ok) {
+      return NextResponse.json({ error: validation.error }, { status: validation.status })
+    }
+
+    // Fail-closed: WHISPER_API_SECRET is strictly required in ALL environments
+    const whisperSecret = (process.env.WHISPER_API_SECRET || '').trim()
     if (!whisperSecret) {
-      console.error("[Transcribe API] Configuration Error: WHISPER_API_SECRET is missing. Halting request.");
+      console.error('[Transcribe API] WHISPER_API_SECRET is not configured.')
       return NextResponse.json(
-        { error: "Transcription service configuration error. Please contact the administrator." },
-        { status: 500 }
-      );
+        { error: 'Transcription service is not configured. You can type your answer manually.' },
+        { status: 503 }
+      )
     }
 
-    const whisperUrl = process.env.WHISPER_SERVICE_URL || "http://127.0.0.1:8000";
-    const targetEndpoint = `${whisperUrl.replace(/\/$/, "")}/transcribe`;
+    const whisperBaseUrl = resolveWhisperServiceUrl()
+    if (!whisperBaseUrl) {
+      console.error('[Transcribe API] WHISPER_SERVICE_URL is not configured in production.')
+      return NextResponse.json(
+        { error: 'Transcription service is currently unavailable. Please enter your answer manually.' },
+        { status: 503 }
+      )
+    }
 
-    // Forward uploaded audio file to local Python Whisper service
-    const outboundData = new FormData();
-    outboundData.append("file", file, file.name || "recording.webm");
+    const targetEndpoint = `${whisperBaseUrl}/transcribe`
 
-    // Server-to-server authentication headers
-    const whisperHeaders: Record<string, string> = {
-      "X-Whisper-Secret": whisperSecret,
-      "Authorization": `Bearer ${whisperSecret}`,
-    };
+    // Forward validated audio to FastAPI faster-whisper service (no external paid API fallback)
+    const audioBytes = await file.arrayBuffer()
+    const forwardBlob = new Blob([audioBytes], { type: validation.mimeType })
+    const outboundData = new FormData()
+    outboundData.append('file', forwardBlob, validation.filename)
 
-    let whisperRes: Response;
-
-    // Phase 1: Attempt outbound request to Whisper service
+    let whisperRes: Response
     try {
       whisperRes = await fetch(targetEndpoint, {
-        method: "POST",
-        headers: whisperHeaders,
+        method: 'POST',
+        headers: {
+          'X-Whisper-Secret': whisperSecret,
+          Authorization: `Bearer ${whisperSecret}`,
+        },
         body: outboundData,
-      });
-    } catch (netErr) {
-      // Network/Connection failure (e.g. ECONNREFUSED, socket hangup, service offline)
-      console.warn("[Transcribe API] Local Whisper service unreachable. Attempting cloud fallback:", netErr);
-      const fallbackText = await fallbackTranscription(file);
-      if (fallbackText) {
-        return NextResponse.json({ text: fallbackText, transcript: fallbackText });
-      }
+        signal: AbortSignal.timeout(WHISPER_REQUEST_TIMEOUT_MS),
+      })
+    } catch (err: unknown) {
+      const isTimeout =
+        err instanceof Error && (err.name === 'TimeoutError' || err.name === 'AbortError')
+      console.warn(
+        `[Transcribe API] Whisper request ${isTimeout ? 'timed out' : 'failed to reach service'}.`
+      )
       return NextResponse.json(
-        { error: "Transcription service is temporarily unavailable. You can type your answer manually." },
-        { status: 503 }
-      );
+        {
+          error: isTimeout
+            ? 'Speech-to-text request timed out. Please retry with a shorter recording or enter your answer manually.'
+            : 'Speech-to-text service is temporarily unavailable. Please enter your answer manually.',
+        },
+        { status: isTimeout ? 504 : 503 }
+      )
     }
 
-    // Phase 2: Inspect response from Whisper service
     if (!whisperRes.ok) {
-      const status = whisperRes.status;
-      console.error(`[Transcribe API] Whisper service returned HTTP ${status}`);
+      const status = whisperRes.status
+      console.error(`[Transcribe API] Whisper service returned HTTP ${status}`)
 
-      // 1. Authentication / Permission errors (HTTP 401 / 403)
-      // Strictly FAIL-CLOSED: DO NOT invoke cloud fallback for auth or config errors
       if (status === 401 || status === 403) {
-        console.error("[Transcribe API] Authentication failure between Next.js and Whisper. Halting without fallback.");
         return NextResponse.json(
-          { error: "Transcription service authentication error. Please contact the administrator." },
-          { status: 500 }
-        );
+          { error: 'Transcription service authentication failed. Please contact the administrator or enter your answer manually.' },
+          { status: 503 }
+        )
       }
 
-      // 2. Client validation errors (HTTP 400 Bad Request, HTTP 413 Payload Too Large)
-      // Request is inherently invalid; do not invoke fallback
-      if (status === 400 || status === 413) {
-        const errJson = await whisperRes.json().catch(() => null);
-        const detail = errJson?.detail || (status === 413 ? "Audio file too large." : "Invalid audio upload.");
-        return NextResponse.json({ error: detail }, { status });
+      if (status === 504) {
+        return NextResponse.json(
+          { error: 'Speech-to-text timed out while decoding audio. Please retry with a shorter clip or enter your answer manually.' },
+          { status: 504 }
+        )
       }
 
-      // 3. Temporary availability failures (HTTP 502 Bad Gateway, 503 Service Unavailable, 504 Gateway Timeout)
-      // Eligible for cloud fallback
-      if (status === 502 || status === 503 || status === 504) {
-        console.warn(`[Transcribe API] Whisper service reported temporary failure (HTTP ${status}). Attempting cloud fallback.`);
-        const fallbackText = await fallbackTranscription(file);
-        if (fallbackText) {
-          return NextResponse.json({ text: fallbackText, transcript: fallbackText });
-        }
+      if (status === 400 || status === 413 || status === 415) {
+        const errJson = (await whisperRes.json().catch(() => null)) as { detail?: string } | null
+        return NextResponse.json(
+          { error: sanitizeUpstreamMessage(errJson?.detail, 'Invalid audio upload.') },
+          { status }
+        )
       }
 
-      // Default server error
       return NextResponse.json(
-        { error: "Transcription service failed to process audio. You can type your answer manually." },
+        { error: 'Speech-to-text processing failed. You can retry recording or type your answer manually.' },
         { status: 503 }
-      );
+      )
     }
 
-    // Success response
-    const data = await whisperRes.json();
-    const transcriptText = (data.text || "").trim();
+    const data = (await whisperRes.json().catch(() => ({}))) as {
+      text?: unknown
+      language?: unknown
+      language_probability?: unknown
+      duration?: unknown
+      processing_ms?: unknown
+    }
+
+    const transcriptText = typeof data.text === 'string' ? data.text.trim() : ''
+    const language = typeof data.language === 'string' && data.language.trim() ? data.language.trim() : null
+    const languageProbability =
+      typeof data.language_probability === 'number' && Number.isFinite(data.language_probability)
+        ? data.language_probability
+        : null
+    const duration =
+      typeof data.duration === 'number' && Number.isFinite(data.duration) ? data.duration : null
+    const processingMs =
+      typeof data.processing_ms === 'number' && Number.isFinite(data.processing_ms)
+        ? data.processing_ms
+        : null
 
     return NextResponse.json({
       text: transcriptText,
       transcript: transcriptText,
-    });
+      language,
+      languageProbability,
+      duration,
+      processingMs,
+    })
   } catch (error: unknown) {
-    console.error("Transcription route error:", error);
+    console.error('[Transcribe API] Unexpected error:', error instanceof Error ? error.name : 'Unknown')
     return NextResponse.json(
-      { error: "Internal transcription server error. You can type your answer manually." },
+      { error: 'Internal transcription error. Please type your answer manually.' },
       { status: 500 }
-    );
+    )
   }
-}
-
-import { getGenAI } from "@/lib/llm/gemini";
-
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let _transcribeModel: any = null;
-
-function getTranscribeModel() {
-  if (!_transcribeModel) {
-    const genAI = getGenAI();
-    _transcribeModel = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-  }
-  return _transcribeModel;
-}
-
-async function fallbackTranscription(file: File): Promise<string | null> {
-  if (!process.env.GEMINI_API_KEY) return null;
-
-  try {
-    const model = getTranscribeModel();
-
-    const buffer = await file.arrayBuffer();
-    const base64Data = Buffer.from(buffer).toString("base64");
-    const rawMime = file.type || "audio/webm";
-    const mimeType = rawMime.split(";")[0] || "audio/webm";
-
-    const result = await model.generateContent([
-      {
-        inlineData: {
-          mimeType,
-          data: base64Data,
-        },
-      },
-      "Transcribe the spoken audio accurately. Output only the verbatim transcribed text, without any conversational prefix or commentary.",
-    ]);
-
-    const text = result.response.text()?.trim();
-    if (text) {
-      console.log("[Transcribe API] Fallback to Gemini successful");
-      return text;
-    }
-  } catch (err) {
-    console.warn("[Transcribe API] Gemini fallback failed:", err);
-  }
-  return null;
 }

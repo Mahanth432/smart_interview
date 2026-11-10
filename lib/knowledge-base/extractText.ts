@@ -1,5 +1,5 @@
-import fs from 'fs'
 import path from 'path'
+import { readDocumentBuffer } from '@/lib/storage/b2'
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const mammoth = require('mammoth') as { extractRawText: (opts: { buffer: Buffer }) => Promise<{ value: string }> }
@@ -35,12 +35,37 @@ function normalizeText(input: any): string {
   return t
 }
 
-export async function extractTextFromFile(storagePath: string): Promise<string> {
+function resolveExtension(storagePath: string, originalFilename?: string, fileType?: string): string {
+  const fromOriginal = path.extname(originalFilename || '').toLowerCase()
+  if (fromOriginal) return fromOriginal
+
+  const fromStorage = path.extname(storagePath).toLowerCase()
+  if (fromStorage) return fromStorage
+
+  const normalizedType = (fileType || '').trim().toLowerCase()
+  if (normalizedType === 'pdf' || normalizedType === 'application/pdf') return '.pdf'
+  if (
+    normalizedType === 'docx' ||
+    normalizedType === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+  ) {
+    return '.docx'
+  }
+  if (normalizedType === 'doc' || normalizedType === 'application/msword') return '.doc'
+  if (normalizedType === 'md' || normalizedType === 'text/markdown') return '.md'
+  if (normalizedType === 'txt' || normalizedType === 'text/plain') return '.txt'
+  return ''
+}
+
+export async function extractTextFromFile(
+  storagePath: string,
+  originalFilename?: string,
+  fileType?: string
+): Promise<string> {
   if (!storagePath) throw new Error('Missing storage path')
 
-  const ext = path.extname(storagePath).toLowerCase()
+  const ext = resolveExtension(storagePath, originalFilename, fileType)
 
-  const buf = await fs.promises.readFile(storagePath)
+  const buf = await readDocumentBuffer(storagePath)
 
   let rawText = ''
 

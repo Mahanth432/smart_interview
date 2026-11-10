@@ -2,6 +2,46 @@ import { NextResponse, NextRequest } from 'next/server'
 
 import { getAppSession } from '@/lib/auth'
 import prisma from '@/lib/db'
+import { buildDocumentDownloadResponse } from '@/lib/knowledge-base/documentHandlers'
+import { deleteDocumentObject } from '@/lib/storage/b2'
+
+// GET /api/documents/[id] — securely stream document bytes from B2 after ownership validation
+export async function GET(
+  request: NextRequest,
+  context: { params: Promise<{ id: string }> }
+) {
+  try {
+    const response = NextResponse.json({})
+    const session = await getAppSession(request, response)
+
+    if (!session?.isLoggedIn || !session.userId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
+    if (session.role === 'CANDIDATE') {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
+
+    const { id: idStr } = await context.params
+    const id = parseInt(idStr, 10)
+    if (Number.isNaN(id)) {
+      return NextResponse.json({ error: 'Invalid document ID' }, { status: 400 })
+    }
+
+    const doc = await prisma.document.findUnique({ where: { id } })
+    if (!doc) {
+      return NextResponse.json({ error: 'Document not found' }, { status: 404 })
+    }
+
+    if (doc.userId !== session.userId) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
+
+    return await buildDocumentDownloadResponse(doc)
+  } catch (err) {
+    console.error('Download document error:', err)
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
+  }
+}
 
 // DELETE /api/documents/[id]
 export async function DELETE(
@@ -43,15 +83,9 @@ export async function DELETE(
     // For SYNCED_FROM_ADMIN docs, only delete the local reference (not the underlying file)
     const isSharedFile = doc.docSource === 'SYNCED_FROM_ADMIN'
 
-    if (!isSharedFile) {
-      // Delete file from disk (best-effort) only for private docs
-      try {
-        const { promises: fs } = await import('fs')
-        if (doc.storagePath) await fs.unlink(doc.storagePath)
-      } catch (e: unknown) {
-        const err = e as NodeJS.ErrnoException
-        if (err?.code !== 'ENOENT') console.error('File delete error:', e)
-      }
+    if (!isSharedFile && doc.storagePath) {
+      // Delete object from B2 (or legacy local storage) before deleting DB record
+      await deleteDocumentObject(doc.storagePath)
     }
 
     // Cascade deletes DocumentChunk rows automatically (onDelete: Cascade)

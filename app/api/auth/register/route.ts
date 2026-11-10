@@ -1,39 +1,42 @@
 import { NextResponse } from 'next/server';
 import bcrypt from 'bcryptjs';
+import { Prisma } from '@prisma/client';
 import prisma from '@/lib/db';
 import { generateSecureOtp, hashOtp, OTP_COOLDOWN_SECONDS } from '@/lib/otp';
 import { sendOtpEmail } from '@/lib/mail';
 import { createAuditLog } from '@/lib/audit-log';
-
-const PASSWORD_MIN_LENGTH = 8;
-
-function validatePasswordStrength(password: string): string | null {
-  if (password.length < PASSWORD_MIN_LENGTH) {
-    return `Password must be at least ${PASSWORD_MIN_LENGTH} characters long.`;
-  }
-  if (!/[0-9!@#$%^&*()_+\-=\[\]{}|;:,.<>?]/.test(password)) {
-    return 'Password must contain at least one number or special character.';
-  }
-  return null;
-}
+import {
+  normalizeUsername,
+  normalizeEmail,
+  validateUsername,
+  validateEmail,
+  validatePasswordStrength,
+} from '@/lib/validation/user';
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const { name, email, password, role } = body;
+    const { username, name, email, password, role } = body;
 
-    const emailInput = (email || '').trim().toLowerCase();
-    const nameInput = (name || '').trim();
+    const usernameInput = normalizeUsername(username);
+    const emailInput = normalizeEmail(email);
+    const nameInput = typeof name === 'string' ? name.trim() : '';
 
-    if (!emailInput || !nameInput || !password) {
+    if (!usernameInput || !emailInput || !nameInput || !password) {
       return NextResponse.json(
-        { error: 'Name, email, and password are required.' },
+        { error: 'Username, full name, email, and password are required.' },
         { status: 400 }
       );
     }
 
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailInput)) {
-      return NextResponse.json({ error: 'Please provide a valid email address.' }, { status: 400 });
+    const usernameError = validateUsername(usernameInput);
+    if (usernameError) {
+      return NextResponse.json({ error: usernameError }, { status: 400 });
+    }
+
+    const emailError = validateEmail(emailInput);
+    if (emailError) {
+      return NextResponse.json({ error: emailError }, { status: 400 });
     }
 
     // Security check: ADMIN accounts can NEVER be created via public registration
@@ -53,26 +56,45 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: passwordError }, { status: 400 });
     }
 
-    // Check if an account with this email already exists
-    const existing = await prisma.user.findFirst({
-      where: {
-        OR: [
-          { email: emailInput },
-          { username: emailInput },
-          { candidate: { email: emailInput } },
-        ],
-      },
-    });
+    // Check username and email uniqueness independently
+    const [existingByEmail, existingByUsername] = await Promise.all([
+      prisma.user.findFirst({
+        where: {
+          OR: [
+            { email: emailInput },
+            { username: emailInput },
+            { candidate: { email: emailInput } },
+          ],
+        },
+      }),
+      prisma.user.findFirst({
+        where: {
+          username: { equals: usernameInput, mode: 'insensitive' },
+        },
+      }),
+    ]);
 
-    if (existing) {
+    if (existingByUsername && (!existingByEmail || existingByUsername.id !== existingByEmail.id)) {
+      return NextResponse.json(
+        { error: 'This username is already taken. Please choose a different username.' },
+        { status: 409 }
+      );
+    }
+
+    if (existingByEmail) {
       // If the existing account is unverified and has matching role, allow re-registration
       // by sending a new OTP (idempotent — don't create a duplicate user)
-      if (!existing.emailVerified && existing.role === assignedRole) {
-        // Update the password hash in case they forgot it
+      if (!existingByEmail.emailVerified && existingByEmail.role === assignedRole) {
+        // Update the password hash, name, and username in case they changed them
         const passwordHash = await bcrypt.hash(password, 12);
         await prisma.user.update({
-          where: { id: existing.id },
-          data: { passwordHash, name: nameInput },
+          where: { id: existingByEmail.id },
+          data: {
+            username: usernameInput,
+            email: emailInput,
+            passwordHash,
+            name: nameInput,
+          },
         });
 
         // Rate limit: check cooldown
@@ -103,7 +125,7 @@ export async function POST(request: Request) {
         const otpHash = hashOtp(otp);
         await prisma.otpVerification.create({
           data: {
-            userId: existing.id,
+            userId: existingByEmail.id,
             email: emailInput,
             otpHash,
             purpose: 'EMAIL_VERIFICATION',
@@ -121,6 +143,7 @@ export async function POST(request: Request) {
           {
             success: true,
             otpRequired: true,
+            username: usernameInput,
             email: emailInput,
             role: assignedRole,
             message: 'A verification code has been sent to your email.',
@@ -130,7 +153,7 @@ export async function POST(request: Request) {
       }
 
       return NextResponse.json(
-        { error: 'An account with this email already exists. Please log in.' },
+        { error: 'An account with this email address already exists. Please log in.' },
         { status: 409 }
       );
     }
@@ -138,10 +161,10 @@ export async function POST(request: Request) {
     // Hash the password
     const passwordHash = await bcrypt.hash(password, 12);
 
-    // Create user with emailVerified = false (pending verification)
+    // Create user with independent username & email and emailVerified = false (pending verification)
     const newUser = await prisma.user.create({
       data: {
-        username: emailInput,
+        username: usernameInput,
         email: emailInput,
         name: nameInput,
         passwordHash,
@@ -195,6 +218,7 @@ export async function POST(request: Request) {
       {
         success: true,
         otpRequired: true,
+        username: newUser.username,
         email: emailInput,
         role: assignedRole,
         message: 'Account created. A 6-digit verification code has been sent to your email.',
@@ -202,6 +226,22 @@ export async function POST(request: Request) {
       { status: 201 }
     );
   } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+      const target = Array.isArray(err.meta?.target) ? err.meta.target.join(',') : String(err.meta?.target || '');
+      if (target.includes('username')) {
+        return NextResponse.json(
+          { error: 'This username is already taken. Please choose a different username.' },
+          { status: 409 }
+        );
+      }
+      if (target.includes('email')) {
+        return NextResponse.json(
+          { error: 'An account with this email address already exists. Please log in.' },
+          { status: 409 }
+        );
+      }
+      return NextResponse.json({ error: 'An account with these details already exists.' }, { status: 409 });
+    }
     console.error('Registration error:', err);
     return NextResponse.json({ error: 'Internal server error.' }, { status: 500 });
   }

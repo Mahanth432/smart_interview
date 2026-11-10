@@ -7,6 +7,9 @@
  * - No OpenAI, no mock/random vectors, no external embedding API
  */
 
+import os from 'os'
+import path from 'path'
+
 export const EMBEDDING_MODEL = 'Xenova/all-MiniLM-L6-v2'
 export const EMBEDDING_DIMENSIONS = 384
 
@@ -24,7 +27,11 @@ let _pipelinePromise: Promise<unknown> | null = globalThis._embeddingPipelinePro
 export function getEmbeddingPipeline(): Promise<unknown> {
   if (!_pipelinePromise) {
     _pipelinePromise = (async () => {
-      const { pipeline } = await import('@xenova/transformers')
+      const { pipeline, env } = await import('@xenova/transformers')
+      if (process.env.VERCEL || process.env.VERCEL_ENV || process.env.TRANSFORMERS_CACHE) {
+        env.cacheDir =
+          process.env.TRANSFORMERS_CACHE || path.join(os.tmpdir(), 'transformers-cache')
+      }
       console.log('[embeddings] Loading local model: Xenova/all-MiniLM-L6-v2 ...')
       const pipe = await pipeline('feature-extraction', EMBEDDING_MODEL, {
         // Suppress informational logs from the transformers library

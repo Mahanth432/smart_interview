@@ -36,7 +36,7 @@ export async function processDocument(id: number) {
 
   try {
     // === Phase 1: Extract text and create chunks ===
-    const extracted = await extractTextFromFile(doc.storagePath)
+    const extracted = await extractTextFromFile(doc.storagePath, doc.originalFilename, doc.fileType)
     const chunkTexts = splitIntoChunks(extracted)
 
     if (chunkTexts.length === 0) throw new Error('Text splitting produced zero chunks')
@@ -96,7 +96,11 @@ export async function processDocument(id: number) {
     const message = err instanceof Error ? err.message : 'Processing failed'
     console.error(`[processDocument] FAILED for doc ${id}:`, err)
 
-    // Mark document as FAILED
+    // Clean up any partial/unembedded chunks and mark document as FAILED
+    await prisma.documentChunk
+      .deleteMany({ where: { documentId: id } })
+      .catch(() => {})
+
     await prisma.document
       .update({
         where: { id },

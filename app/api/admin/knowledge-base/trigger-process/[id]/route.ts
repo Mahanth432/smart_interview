@@ -1,6 +1,7 @@
 import { NextResponse, NextRequest } from 'next/server'
 import { getAppSession } from '@/lib/auth'
 import prisma from '@/lib/db'
+import { scheduleDocumentProcessing } from '@/lib/knowledge-base/documentHandlers'
 
 // POST /api/admin/knowledge-base/trigger-process/[id]
 export async function POST(
@@ -36,9 +37,7 @@ export async function POST(
     await prisma.document.update({ where: { id }, data: { status: 'UPLOADED' } })
 
     // Kick off background processing
-    import('@/lib/knowledge-base/processDocument')
-      .then(({ processDocument }) => processDocument(id))
-      .catch((e) => console.error('Reprocess error:', e))
+    scheduleDocumentProcessing(id)
 
     return NextResponse.json({ success: true, message: 'Processing started' })
   } catch (err) {

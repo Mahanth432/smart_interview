@@ -70,6 +70,7 @@ export default function RegisterPage() {
   const router = useRouter()
 
   // Form fields
+  const [username, setUsername] = useState('')
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -124,9 +125,19 @@ export default function RegisterPage() {
     e.preventDefault()
     setError('')
 
+    const trimmedUsername = username.trim()
     const trimmedName = name.trim()
     const trimmedEmail = email.trim().toLowerCase()
 
+    if (!trimmedUsername) { setError('Please choose a username.'); return }
+    if (trimmedUsername.includes('@')) {
+      setError("Username cannot contain '@'. Use a separate username and email address.")
+      return
+    }
+    if (!/^[a-zA-Z0-9_.-]{3,40}$/.test(trimmedUsername)) {
+      setError('Username must be 3–40 characters and contain only letters, numbers, _, ., or -.')
+      return
+    }
     if (!trimmedName) { setError('Please enter your full name.'); return }
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmedEmail)) {
       setError('Please provide a valid email address.')
@@ -144,7 +155,13 @@ export default function RegisterPage() {
       const res = await fetch('/api/auth/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: trimmedName, email: trimmedEmail, password, role }),
+        body: JSON.stringify({
+          username: trimmedUsername,
+          name: trimmedName,
+          email: trimmedEmail,
+          password,
+          role,
+        }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Failed to create account')
@@ -306,6 +323,26 @@ export default function RegisterPage() {
                     <Icon name="co_present" size={17} /> Interviewer
                   </button>
                 </div>
+              </div>
+
+              {/* Username */}
+              <div>
+                <label htmlFor="reg-username" style={{ display: 'block', fontSize: '0.85rem', color: 'var(--color-text-secondary)', marginBottom: '0.45rem', fontWeight: 500 }}>
+                  Username
+                </label>
+                <input
+                  id="reg-username"
+                  type="text"
+                  className="auth-input"
+                  value={username}
+                  onChange={(e) => setUsername(e.target.value)}
+                  placeholder="e.g. alex_johnson"
+                  autoComplete="username"
+                  required
+                />
+                <span style={{ fontSize: '0.73rem', color: 'var(--color-text-muted)', marginTop: '4px', display: 'block' }}>
+                  3–40 characters (letters, numbers, _, ., -). Stored separately from your email.
+                </span>
               </div>
 
               {/* Full Name */}

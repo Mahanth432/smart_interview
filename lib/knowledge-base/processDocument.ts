@@ -1,9 +1,12 @@
 import prisma from '@/lib/db'
+import { createAuditLog } from '@/lib/audit-log'
 import { extractTextFromFile } from './extractText'
-import { generateEmbeddingsBatch } from './embeddings'
+import { EMBEDDING_DIMENSIONS, generateEmbeddingsBatch } from './embeddings'
+
+const STALE_PROCESSING_MS = 3 * 60 * 1000
 
 // Split text into overlapping chunks
-function splitIntoChunks(text: string, chunkSize = 1200, overlap = 200): string[] {
+export function splitIntoChunks(text: string, chunkSize = 1200, overlap = 200): string[] {
   const chunks: string[] = []
   let start = 0
   while (start < text.length) {
@@ -15,100 +18,184 @@ function splitIntoChunks(text: string, chunkSize = 1200, overlap = 200): string[
   return chunks.filter((c) => c.length > 0)
 }
 
+export function sanitizeProcessingError(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err || 'Document processing failed')
+  const redacted = raw
+    .replace(/postgres(ql)?:\/\/[^\s]+/gi, '<redacted-db-url>')
+    .replace(/(key|secret|token|password|authorization)=([^\s&]+)/gi, '$1=<redacted>')
+    .trim()
+  return redacted.length > 400 ? redacted.slice(0, 400) + '...' : redacted
+}
+
+export async function markDocumentProcessingFailed(
+  docId: number,
+  err: unknown,
+  context?: { userId?: number | null; username?: string | null }
+): Promise<string> {
+  const safeError = sanitizeProcessingError(err)
+
+  await prisma.documentChunk
+    .deleteMany({ where: { documentId: docId } })
+    .catch(() => {})
+
+  await prisma.document
+    .updateMany({
+      where: {
+        id: docId,
+        status: { in: ['UPLOADED', 'PROCESSING'] },
+      },
+      data: { status: 'FAILED' },
+    })
+    .catch(() => {})
+
+  await createAuditLog({
+    userId: context?.userId ?? undefined,
+    username: context?.username ?? undefined,
+    action: 'DOCUMENT_PROCESSING_FAILED',
+    entityType: 'Document',
+    entityId: String(docId),
+    status: 'FAILURE',
+    metadata: { error: safeError },
+  })
+
+  return safeError
+}
+
+export interface ProcessDocumentResult {
+  status: 'PROCESSED' | 'ALREADY_PROCESSING' | 'ALREADY_PROCESSED'
+  chunkCount?: number
+}
+
+export interface ProcessDocumentOptions {
+  force?: boolean
+  actingUserId?: number | null
+  actingUsername?: string | null
+  extractFn?: (storagePath: string, originalFilename?: string, fileType?: string) => Promise<string>
+  embedFn?: (texts: string[]) => Promise<number[][]>
+}
+
 /**
- * Full document processing pipeline:
- *   upload → extract text → clean → chunk → save chunks → generate embeddings → store vectors
+ * Full durable document processing pipeline:
+ *   claim lock (UPLOADED/FAILED -> PROCESSING)
+ *   -> extract text -> chunk -> generate 384-dim Xenova/all-MiniLM-L6-v2 embeddings
+ *   -> atomic batched DB transaction (delete stale chunks + UNNEST insert + mark PROCESSED)
  *
- * The document is only marked PROCESSED after ALL chunk embeddings are stored.
- * If any step fails, the document is marked FAILED.
+ * - Uses atomic conditional updateMany lock to prevent concurrent processing of the same document.
+ * - Uses a non-interactive Prisma batch $transaction([...]) with UNNEST so Neon PgBouncer
+ *   never hits interactive transaction P2028 timeouts while preserving full atomicity.
+ * - Guarantees FAILED status + sanitized AuditLog entry on any failure.
  */
-export async function processDocument(id: number) {
+export async function processDocument(
+  id: number,
+  options: ProcessDocumentOptions = {}
+): Promise<ProcessDocumentResult> {
+  const force = Boolean(options.force)
+  const extractFn = options.extractFn ?? extractTextFromFile
+  const embedFn = options.embedFn ?? generateEmbeddingsBatch
+
   const doc = await prisma.document.findUnique({ where: { id } })
   if (!doc) throw new Error('Document not found')
 
-  // Avoid duplicate processing
-  if (doc.status === 'PROCESSING') return
+  const staleCutoff = new Date(Date.now() - STALE_PROCESSING_MS)
+  const allowedStatuses = force ? ['UPLOADED', 'FAILED', 'PROCESSED'] : ['UPLOADED', 'FAILED']
 
-  await prisma.document.update({
-    where: { id },
+  // Atomic conditional lock prevents duplicate/concurrent processing
+  const claimed = await prisma.document.updateMany({
+    where: {
+      id,
+      OR: [
+        { status: { in: allowedStatuses } },
+        { status: 'PROCESSING', updatedAt: { lt: staleCutoff } },
+      ],
+    },
     data: { status: 'PROCESSING' },
   })
 
+  if (claimed.count === 0) {
+    const latest = await prisma.document.findUnique({
+      where: { id },
+      select: { status: true },
+    })
+    if (!latest) throw new Error('Document not found')
+    if (latest.status === 'PROCESSING') {
+      return { status: 'ALREADY_PROCESSING' }
+    }
+    return { status: 'ALREADY_PROCESSED' }
+  }
+
+  const auditCtx = {
+    userId: options.actingUserId ?? doc.userId,
+    username: options.actingUsername ?? null,
+  }
+
   try {
-    // === Phase 1: Extract text and create chunks ===
-    const extracted = await extractTextFromFile(doc.storagePath, doc.originalFilename, doc.fileType)
+    // Phase 1: Extract text and split into overlapping chunks
+    const extracted = await extractFn(doc.storagePath, doc.originalFilename, doc.fileType)
     const chunkTexts = splitIntoChunks(extracted)
 
-    if (chunkTexts.length === 0) throw new Error('Text splitting produced zero chunks')
+    if (chunkTexts.length === 0) {
+      throw new Error('Text splitting produced zero chunks')
+    }
 
-    // Clear any stale chunks from a prior failed run and create new ones
-    await prisma.$transaction(async (tx) => {
-      await tx.documentChunk.deleteMany({ where: { documentId: id } })
-      await tx.documentChunk.createMany({
-        data: chunkTexts.map((content, chunkIndex) => ({
-          documentId: id,
-          content,
-          chunkIndex,
-        })),
-      })
-    })
+    console.log(`[processDocument] Doc ${id}: chunk count = ${chunkTexts.length}`)
+    console.log(`[processDocument] Doc ${id}: embedding generation started`)
 
-    console.log(`[processDocument] Chunk count: ${chunkTexts.length}`)
-    console.log(`[processDocument] Embedding generation started`)
-
-    // === Phase 2: Generate LOCAL embeddings and store them ===
-    const embeddings = await generateEmbeddingsBatch(chunkTexts)
-    console.log(`[processDocument] Embedding generation completed`)
-
-    // Fetch the created chunk IDs (ordered by chunkIndex to match embedding order)
-    const savedChunks = await prisma.documentChunk.findMany({
-      where: { documentId: id },
-      orderBy: { chunkIndex: 'asc' },
-      select: { id: true, chunkIndex: true },
-    })
-
-    if (savedChunks.length !== embeddings.length) {
+    // Phase 2: Generate 384-dimensional Xenova/all-MiniLM-L6-v2 embeddings in memory
+    const embeddings = await embedFn(chunkTexts)
+    if (embeddings.length !== chunkTexts.length) {
       throw new Error(
-        `Chunk/embedding count mismatch: ${savedChunks.length} chunks vs ${embeddings.length} embeddings`
+        `Chunk/embedding count mismatch: ${chunkTexts.length} chunks vs ${embeddings.length} embeddings`
       )
     }
 
-    // Store embeddings using raw SQL inside a single transaction
-    const updatePromises = savedChunks.map((chunk, i) => {
-      const vector = embeddings[i]
-      const vectorStr = `[${vector.join(',')}]`
-      return prisma.$executeRawUnsafe(
-        `UPDATE "DocumentChunk" SET "embedding" = $1::vector WHERE "id" = $2`,
-        vectorStr,
-        chunk.id
-      )
+    const vectorStrings = embeddings.map((vec, idx) => {
+      if (!Array.isArray(vec) || vec.length !== EMBEDDING_DIMENSIONS) {
+        throw new Error(
+          `Invalid embedding dimension at chunk ${idx}: got ${vec?.length ?? 0}, expected ${EMBEDDING_DIMENSIONS}`
+        )
+      }
+      if (vec.some((n) => !Number.isFinite(n))) {
+        throw new Error(`Non-finite embedding value at chunk ${idx}`)
+      }
+      return `[${vec.join(',')}]`
     })
-    await prisma.$transaction(updatePromises)
+    const chunkIndices = chunkTexts.map((_, idx) => idx)
+
+    // Phase 3: Atomic non-interactive batch transaction (immune to P2028 on Neon pooler)
+    await prisma.$transaction([
+      prisma.documentChunk.deleteMany({ where: { documentId: id } }),
+      prisma.$executeRaw`
+        INSERT INTO "DocumentChunk" ("documentId", "content", "chunkIndex", "createdAt", "embedding")
+        SELECT ${id}::int, u.content, u.chunk_index, NOW(), u.embedding::vector(384)
+        FROM UNNEST(
+          ${chunkTexts}::text[],
+          ${chunkIndices}::int[],
+          ${vectorStrings}::text[]
+        ) AS u(content, chunk_index, embedding)
+      `,
+      prisma.document.update({
+        where: { id },
+        data: { status: 'PROCESSED' },
+      }),
+    ])
 
     console.log(`[processDocument] Doc ${id}: stored ${embeddings.length} embeddings successfully`)
 
-    // === Phase 3: Mark as fully processed ===
-    await prisma.document.update({
-      where: { id },
-      data: { status: 'PROCESSED' },
+    await createAuditLog({
+      userId: auditCtx.userId ?? undefined,
+      username: auditCtx.username ?? undefined,
+      action: 'DOCUMENT_PROCESSING_SUCCEEDED',
+      entityType: 'Document',
+      entityId: String(id),
+      status: 'SUCCESS',
+      metadata: { chunkCount: chunkTexts.length },
     })
+
+    return { status: 'PROCESSED', chunkCount: chunkTexts.length }
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Processing failed'
     console.error(`[processDocument] FAILED for doc ${id}:`, err)
-
-    // Clean up any partial/unembedded chunks and mark document as FAILED
-    await prisma.documentChunk
-      .deleteMany({ where: { documentId: id } })
-      .catch(() => {})
-
-    await prisma.document
-      .update({
-        where: { id },
-        data: { status: 'FAILED' },
-      })
-      .catch(() => {})
-
-    throw new Error(message)
+    const safeError = await markDocumentProcessingFailed(id, err, auditCtx)
+    throw new Error(safeError)
   }
 }
 

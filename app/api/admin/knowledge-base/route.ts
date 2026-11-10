@@ -1,7 +1,9 @@
 import { NextResponse } from 'next/server'
 import { getAppSession } from '@/lib/auth'
 import prisma from '@/lib/db'
-import { handleDocumentUpload } from '@/lib/knowledge-base/documentHandlers'
+import { handleDocumentUpload, getFailedDocumentErrors } from '@/lib/knowledge-base/documentHandlers'
+
+export const maxDuration = 60
 
 // GET /api/admin/knowledge-base — list ALL admin master documents
 export async function GET(request: Request) {
@@ -24,6 +26,9 @@ export async function GET(request: Request) {
       },
     })
 
+    const failedIds = documents.filter((d) => d.status === 'FAILED').map((d) => d.id)
+    const errorMap = await getFailedDocumentErrors(failedIds)
+
     const safe = documents.map((d) => ({
       id: d.id,
       name: d.name,
@@ -35,6 +40,7 @@ export async function GET(request: Request) {
       updatedAt: d.updatedAt,
       docSource: d.docSource,
       chunkCount: d._count.chunks,
+      lastError: errorMap.get(d.id) ?? null,
     }))
 
     return NextResponse.json({ documents: safe })

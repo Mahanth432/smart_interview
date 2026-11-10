@@ -1,9 +1,13 @@
 import { NextResponse, NextRequest } from 'next/server'
 import { getAppSession } from '@/lib/auth'
-import prisma from '@/lib/db'
-import { scheduleDocumentProcessing } from '@/lib/knowledge-base/documentHandlers'
+import { retryDocumentProcessing } from '@/lib/knowledge-base/documentHandlers'
+
+export const maxDuration = 60
 
 // POST /api/admin/knowledge-base/trigger-process/[id]
+// Durable retryable processing for ADMIN_MASTER documents.
+// Executes synchronously by default (returning 200 PROCESSED / 409 conflict / 500 FAILED),
+// or schedules via after() when ?async=true is supplied.
 export async function POST(
   request: NextRequest,
   context: { params: Promise<{ id: string }> }
@@ -21,25 +25,20 @@ export async function POST(
 
     const { id: idStr } = await context.params
     const id = parseInt(idStr, 10)
-    if (Number.isNaN(id)) {
+    if (Number.isNaN(id) || id <= 0) {
       return NextResponse.json({ error: 'Invalid document ID' }, { status: 400 })
     }
 
-    const doc = await prisma.document.findUnique({ where: { id } })
-    if (!doc) {
-      return NextResponse.json({ error: 'Document not found' }, { status: 404 })
-    }
-    if (doc.docSource !== 'ADMIN_MASTER') {
-      return NextResponse.json({ error: 'Not an admin master document' }, { status: 400 })
-    }
+    const asyncMode = new URL(request.url).searchParams.get('async') === 'true'
 
-    // Reset status to allow reprocessing
-    await prisma.document.update({ where: { id }, data: { status: 'UPLOADED' } })
-
-    // Kick off background processing
-    scheduleDocumentProcessing(id)
-
-    return NextResponse.json({ success: true, message: 'Processing started' })
+    return await retryDocumentProcessing({
+      docId: id,
+      userId: session.userId,
+      username: session.username,
+      role: session.role,
+      requireAdminMaster: true,
+      sync: !asyncMode,
+    })
   } catch (err) {
     console.error('Admin KB trigger-process error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

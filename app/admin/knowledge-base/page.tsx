@@ -14,6 +14,7 @@ type Doc = {
   createdAt: string
   updatedAt: string
   chunkCount: number
+  lastError?: string | null
 }
 
 export default function AdminKnowledgeBasePage() {
@@ -51,6 +52,7 @@ export default function AdminKnowledgeBasePage() {
 
     let successCount = 0
     let failCount = 0
+    let lastUploadError = ''
 
     for (const file of files) {
       const fd = new FormData()
@@ -62,11 +64,21 @@ export default function AdminKnowledgeBasePage() {
         if (res.ok) {
           successCount++
         } else {
-          const data = await res.json()
-          console.error('Upload error:', data.error)
+          let errMsg = `HTTP ${res.status}`
+          if (res.status === 413) {
+            errMsg = `"${file.name}" exceeds Vercel's 4.5 MB upload payload limit.`
+          } else {
+            try {
+              const data = await res.json()
+              if (data?.error) errMsg = data.error
+            } catch {}
+          }
+          console.error('Upload error:', errMsg)
+          lastUploadError = errMsg
           failCount++
         }
       } catch {
+        lastUploadError = 'Network error while uploading.'
         failCount++
       }
     }
@@ -74,9 +86,9 @@ export default function AdminKnowledgeBasePage() {
     if (successCount === files.length) {
       setSuccess(`Successfully uploaded ${successCount} document(s) to Admin Master KB — processing in background...`)
     } else if (successCount > 0) {
-      setSuccess(`Uploaded ${successCount} document(s), but ${failCount} failed.`)
+      setSuccess(`Uploaded ${successCount} document(s), but ${failCount} failed.${lastUploadError ? ` (${lastUploadError})` : ''}`)
     } else {
-      setError('Upload failed for all documents.')
+      setError(lastUploadError || 'Upload failed for all documents.')
     }
 
     e.target.value = ''
@@ -109,16 +121,16 @@ export default function AdminKnowledgeBasePage() {
   const onTriggerProcess = async (id: number) => {
     setLoading(true)
     setError(null)
+    setSuccess(null)
     try {
       const res = await fetch(`/api/admin/knowledge-base/trigger-process/${id}`, { method: 'POST', credentials: 'include' })
       const data = await res.json()
       if (!res.ok) {
-        setError(data.error || 'Processing failed to start')
+        setError(data.error || 'Processing failed')
       } else {
-        setSuccess('Processing started — refresh in a few seconds.')
-        setTimeout(() => fetchDocs(), 3000)
-        setTimeout(() => fetchDocs(), 7000)
+        setSuccess(`Document processed (${data.chunkCount ?? 0} chunks indexed).`)
       }
+      await fetchDocs()
     } catch {
       setError('Failed to trigger processing')
     } finally {
@@ -324,7 +336,12 @@ export default function AdminKnowledgeBasePage() {
                       {new Date(d.createdAt).toLocaleDateString()}
                     </td>
                     <td>
-                      {statusBadge(d.status)}
+                      <div>{statusBadge(d.status)}</div>
+                      {d.status === 'FAILED' && d.lastError && (
+                        <div style={{ fontSize: '0.72rem', color: '#dc2626', marginTop: '0.25rem', maxWidth: '220px', wordBreak: 'break-word' }}>
+                          {d.lastError}
+                        </div>
+                      )}
                     </td>
                     <td style={{ textAlign: 'right' }}>
                       <div style={{ display: 'inline-flex', gap: '0.4rem', alignItems: 'center' }}>
@@ -334,10 +351,10 @@ export default function AdminKnowledgeBasePage() {
                             disabled={loading}
                             className="zentra-btn zentra-btn-secondary"
                             style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }}
-                            title="Process chunks"
+                            title={d.status === 'FAILED' ? 'Retry processing' : 'Process chunks'}
                           >
                             <Icon name="refresh" size={14} />
-                            <span>Process</span>
+                            <span>{d.status === 'FAILED' ? 'Retry' : 'Process'}</span>
                           </button>
                         )}
                         <button

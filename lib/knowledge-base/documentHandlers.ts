@@ -14,6 +14,7 @@ import {
 } from '@/lib/storage/b2'
 
 const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024 // 10MB
+const STALE_PROCESSING_MS = 3 * 60 * 1000
 
 const ALLOWED_MIME_TYPES = new Set([
   'application/pdf',
@@ -25,13 +26,53 @@ const ALLOWED_MIME_TYPES = new Set([
 
 const ALLOWED_EXTENSIONS = new Set(['.pdf', '.txt', '.md', '.doc', '.docx'])
 
-export function scheduleDocumentProcessing(docId: number): void {
+async function fallbackMarkDocumentFailed(
+  docId: number,
+  err: unknown,
+  ctx?: { userId?: number; username?: string | null }
+): Promise<void> {
+  const raw = err instanceof Error ? err.message : String(err || 'Background processing error')
+  const safeError = raw
+    .replace(/postgres(ql)?:\/\/[^\s]+/gi, '<redacted-db-url>')
+    .replace(/(key|secret|token|password|authorization)=([^\s&]+)/gi, '$1=<redacted>')
+    .slice(0, 400)
+
+  await prisma.document
+    .updateMany({
+      where: { id: docId, status: { in: ['UPLOADED', 'PROCESSING'] } },
+      data: { status: 'FAILED' },
+    })
+    .catch(() => {})
+
+  await createAuditLog({
+    userId: ctx?.userId,
+    username: ctx?.username ?? undefined,
+    action: 'DOCUMENT_PROCESSING_FAILED',
+    entityType: 'Document',
+    entityId: String(docId),
+    status: 'FAILURE',
+    metadata: { error: safeError, stage: 'scheduler' },
+  })
+}
+
+export function scheduleDocumentProcessing(
+  docId: number,
+  options?: { userId?: number; username?: string | null; force?: boolean }
+): void {
   const run = async () => {
     try {
       const { processDocument } = await import('@/lib/knowledge-base/processDocument')
-      await processDocument(docId)
+      await processDocument(docId, {
+        force: options?.force,
+        actingUserId: options?.userId,
+        actingUsername: options?.username,
+      })
     } catch (err) {
       console.error('Background processing error:', err)
+      await fallbackMarkDocumentFailed(docId, err, {
+        userId: options?.userId,
+        username: options?.username,
+      })
     }
   }
 
@@ -40,6 +81,125 @@ export function scheduleDocumentProcessing(docId: number): void {
   } catch {
     void run()
   }
+}
+
+export async function getFailedDocumentErrors(docIds: number[]): Promise<Map<number, string>> {
+  const map = new Map<number, string>()
+  if (docIds.length === 0) return map
+
+  const logs = await prisma.auditLog.findMany({
+    where: {
+      action: 'DOCUMENT_PROCESSING_FAILED',
+      entityType: 'Document',
+      entityId: { in: docIds.map(String) },
+    },
+    orderBy: { createdAt: 'desc' },
+    select: { entityId: true, metadata: true },
+  })
+
+  for (const log of logs) {
+    if (!log.entityId) continue
+    const id = parseInt(log.entityId, 10)
+    if (Number.isNaN(id) || map.has(id)) continue
+    const meta = log.metadata as { error?: unknown } | null
+    if (meta && typeof meta.error === 'string' && meta.error.trim()) {
+      map.set(id, meta.error)
+    }
+  }
+
+  return map
+}
+
+export async function retryDocumentProcessing(params: {
+  docId: number
+  userId: number
+  username?: string | null
+  role: string
+  requireAdminMaster?: boolean
+  sync?: boolean
+}): Promise<NextResponse> {
+  const doc = await prisma.document.findUnique({
+    where: { id: params.docId },
+    select: {
+      id: true,
+      userId: true,
+      docSource: true,
+      status: true,
+      updatedAt: true,
+    },
+  })
+
+  if (!doc) {
+    return NextResponse.json({ error: 'Document not found' }, { status: 404 })
+  }
+
+  if (params.requireAdminMaster) {
+    if (params.role !== 'ADMIN') {
+      return NextResponse.json({ error: 'Forbidden — Admin only' }, { status: 403 })
+    }
+    if (doc.docSource !== 'ADMIN_MASTER') {
+      return NextResponse.json({ error: 'Not an admin master document' }, { status: 400 })
+    }
+  } else {
+    if (doc.userId !== params.userId) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
+    if (doc.docSource === 'ADMIN_MASTER' && params.role !== 'ADMIN') {
+      return NextResponse.json({ error: 'Forbidden — Admin master documents cannot be reprocessed here' }, { status: 403 })
+    }
+  }
+
+  const isActivelyProcessing =
+    doc.status === 'PROCESSING' && Date.now() - doc.updatedAt.getTime() < STALE_PROCESSING_MS
+  if (isActivelyProcessing) {
+    return NextResponse.json(
+      { error: 'Document is already being processed. Please wait for the active job to finish.' },
+      { status: 409 }
+    )
+  }
+
+  if (params.sync) {
+    try {
+      const { processDocument } = await import('@/lib/knowledge-base/processDocument')
+      const result = await processDocument(doc.id, {
+        force: true,
+        actingUserId: params.userId,
+        actingUsername: params.username,
+      })
+
+      if (result.status === 'ALREADY_PROCESSING') {
+        return NextResponse.json(
+          { error: 'Document is already being processed.' },
+          { status: 409 }
+        )
+      }
+
+      return NextResponse.json({
+        success: true,
+        status: result.status,
+        chunkCount: result.chunkCount ?? 0,
+        message: 'Document processed successfully.',
+      })
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Processing failed'
+      await fallbackMarkDocumentFailed(doc.id, err, {
+        userId: params.userId,
+        username: params.username,
+      })
+      return NextResponse.json({ error: msg, status: 'FAILED' }, { status: 500 })
+    }
+  }
+
+  scheduleDocumentProcessing(doc.id, {
+    userId: params.userId,
+    username: params.username,
+    force: true,
+  })
+
+  return NextResponse.json(
+    { success: true, message: 'Processing started', status: doc.status },
+    { status: 202 }
+  )
 }
 
 export async function handleDocumentUpload(params: {
@@ -144,7 +304,10 @@ export async function handleDocumentUpload(params: {
   })
 
   // Kick off background processing (extract text -> chunks -> embeddings -> Neon pgvector)
-  scheduleDocumentProcessing(doc.id)
+  scheduleDocumentProcessing(doc.id, {
+    userId: params.userId,
+    username: params.username,
+  })
 
   return NextResponse.json(
     { success: true, document: { id: doc.id, status: 'UPLOADED' } },

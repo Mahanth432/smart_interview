@@ -10,7 +10,16 @@ const nextConfig: NextConfig = {
       },
     ],
   },
-  serverExternalPackages: ['pdf-parse', 'pdfjs-dist', '@xenova/transformers', 'bcryptjs'],
+  serverExternalPackages: ['unpdf', '@xenova/transformers', 'bcryptjs'],
+  outputFileTracingExcludes: {
+    '*': [
+      './storage/**',
+      './storage/**/*',
+      './node_modules/onnxruntime-node/bin/napi-v3/win32/**',
+      './node_modules/onnxruntime-node/bin/napi-v3/darwin/**',
+      './node_modules/@napi-rs/**',
+    ],
+  },
 }
 
 export default nextConfig

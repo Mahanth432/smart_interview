@@ -15,6 +15,7 @@ type Doc = {
   createdAt: string
   updatedAt: string
   chunkCount: number
+  lastError?: string | null
 }
 
 export const KnowledgeBaseClient = () => {
@@ -106,6 +107,7 @@ export const KnowledgeBaseClient = () => {
 
     let successCount = 0
     let failCount = 0
+    let lastUploadError = ''
 
     for (const file of files) {
       const fd = new FormData()
@@ -117,9 +119,20 @@ export const KnowledgeBaseClient = () => {
         if (res.ok) {
           successCount++
         } else {
+          let errMsg = `HTTP ${res.status}`
+          if (res.status === 413) {
+            errMsg = `"${file.name}" exceeds Vercel's 4.5 MB upload payload limit.`
+          } else {
+            try {
+              const data = await res.json()
+              if (data?.error) errMsg = data.error
+            } catch {}
+          }
+          lastUploadError = errMsg
           failCount++
         }
       } catch {
+        lastUploadError = 'Network error while uploading.'
         failCount++
       }
     }
@@ -127,9 +140,9 @@ export const KnowledgeBaseClient = () => {
     if (successCount === files.length) {
       setSuccess(`Successfully uploaded ${successCount} document(s) — processing in background...`)
     } else if (successCount > 0) {
-      setSuccess(`Uploaded ${successCount} document(s), but ${failCount} failed.`)
+      setSuccess(`Uploaded ${successCount} document(s), but ${failCount} failed.${lastUploadError ? ` (${lastUploadError})` : ''}`)
     } else {
-      setError('Upload failed for all documents.')
+      setError(lastUploadError || 'Upload failed for all documents.')
     }
 
     e.target.value = ''
@@ -137,6 +150,26 @@ export const KnowledgeBaseClient = () => {
     setTimeout(() => fetchDocs(), 2000)
     setTimeout(() => fetchDocs(), 5000)
     setLoading(false)
+  }
+
+  const onTriggerProcess = async (id: number) => {
+    setLoading(true)
+    setError(null)
+    setSuccess(null)
+    try {
+      const res = await fetch(`/api/documents/${id}/process`, { method: 'POST', credentials: 'include' })
+      const data = await res.json()
+      if (!res.ok) {
+        setError(data.error || 'Processing failed')
+      } else {
+        setSuccess(`Document processed (${data.chunkCount ?? 0} chunks indexed).`)
+      }
+      await fetchDocs()
+    } catch {
+      setError('Failed to process document')
+    } finally {
+      setLoading(false)
+    }
   }
 
   const onDelete = async (id: number, docSource: string) => {
@@ -429,17 +462,38 @@ export const KnowledgeBaseClient = () => {
                     <td style={{ color: 'var(--color-text-muted)', fontSize: '0.8rem' }}>
                       {new Date(d.createdAt).toLocaleDateString()}
                     </td>
-                    <td>{statusBadge(d.status)}</td>
+                    <td>
+                      <div>{statusBadge(d.status)}</div>
+                      {d.status === 'FAILED' && d.lastError && (
+                        <div style={{ fontSize: '0.72rem', color: '#ef4444', marginTop: '0.25rem', maxWidth: '220px', wordBreak: 'break-word' }}>
+                          {d.lastError}
+                        </div>
+                      )}
+                    </td>
                     <td style={{ textAlign: 'right' }}>
-                      <button
-                        onClick={() => onDelete(d.id, d.docSource)}
-                        disabled={loading}
-                        className="zentra-btn zentra-btn-ghost"
-                        style={{ padding: '6px 10px', color: '#ef4444' }}
-                        title={d.docSource === 'SYNCED_FROM_ADMIN' ? 'Remove from your KB' : 'Delete document'}
-                      >
-                        <Icon name="delete" size={16} />
-                      </button>
+                      <div style={{ display: 'inline-flex', gap: '0.35rem', alignItems: 'center' }}>
+                        {d.docSource !== 'SYNCED_FROM_ADMIN' && (d.status === 'UPLOADED' || d.status === 'FAILED') && (
+                          <button
+                            onClick={() => onTriggerProcess(d.id)}
+                            disabled={loading}
+                            className="zentra-btn zentra-btn-secondary"
+                            style={{ padding: '0.3rem 0.65rem', fontSize: '0.75rem' }}
+                            title={d.status === 'FAILED' ? 'Retry processing' : 'Process document'}
+                          >
+                            <Icon name="refresh" size={14} />
+                            <span>{d.status === 'FAILED' ? 'Retry' : 'Process'}</span>
+                          </button>
+                        )}
+                        <button
+                          onClick={() => onDelete(d.id, d.docSource)}
+                          disabled={loading}
+                          className="zentra-btn zentra-btn-ghost"
+                          style={{ padding: '6px 10px', color: '#ef4444' }}
+                          title={d.docSource === 'SYNCED_FROM_ADMIN' ? 'Remove from your KB' : 'Delete document'}
+                        >
+                          <Icon name="delete" size={16} />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))

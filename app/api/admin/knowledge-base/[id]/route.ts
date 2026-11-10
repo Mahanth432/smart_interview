@@ -34,7 +34,10 @@ export async function GET(
       return NextResponse.json({ error: 'Not an admin master document' }, { status: 400 })
     }
 
-    return await buildDocumentDownloadResponse(doc)
+    return await buildDocumentDownloadResponse(doc, {
+      userId: session.userId,
+      username: session.username,
+    })
   } catch (err) {
     console.error('Admin KB download error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

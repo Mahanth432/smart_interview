@@ -36,7 +36,10 @@ export async function GET(
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 
-    return await buildDocumentDownloadResponse(doc)
+    return await buildDocumentDownloadResponse(doc, {
+      userId: session.userId,
+      username: session.username,
+    })
   } catch (err) {
     console.error('Download document error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
@@ -80,16 +83,17 @@ export async function DELETE(
       return NextResponse.json({ error: 'Forbidden — Admin master documents cannot be deleted here' }, { status: 403 })
     }
 
-    // For SYNCED_FROM_ADMIN docs, only delete the local reference (not the underlying file)
-    const isSharedFile = doc.docSource === 'SYNCED_FROM_ADMIN'
-
-    if (!isSharedFile && doc.storagePath) {
-      // Delete object from B2 (or legacy local storage) before deleting DB record
-      await deleteDocumentObject(doc.storagePath)
-    }
-
     // Cascade deletes DocumentChunk rows automatically (onDelete: Cascade)
     await prisma.document.delete({ where: { id } })
+
+    // Only delete underlying B2 object for private docs when no other Document rows reference the same key
+    const isSharedFile = doc.docSource === 'SYNCED_FROM_ADMIN'
+    if (!isSharedFile && doc.storagePath) {
+      const remainingRefs = await prisma.document.count({ where: { storagePath: doc.storagePath } })
+      if (remainingRefs === 0) {
+        await deleteDocumentObject(doc.storagePath)
+      }
+    }
 
     const { createAuditLog } = await import('@/lib/audit-log')
     createAuditLog({

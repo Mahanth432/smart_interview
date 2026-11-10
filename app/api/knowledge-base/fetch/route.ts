@@ -18,17 +18,18 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Forbidden — Interviewer only' }, { status: 403 })
     }
 
-    // Get all admin master docs
+    // Get all available admin master docs
     const adminDocs = await prisma.document.findMany({
-      where: { docSource: 'ADMIN_MASTER' },
+      where: { docSource: 'ADMIN_MASTER', storageStatus: 'AVAILABLE' },
       orderBy: { createdAt: 'desc' },
     })
 
-    // Get this interviewer's synced copies
+    // Get this interviewer's available synced copies
     const syncedDocs = await prisma.document.findMany({
       where: {
         userId: session.userId,
         docSource: 'SYNCED_FROM_ADMIN',
+        storageStatus: 'AVAILABLE',
       },
     })
 
@@ -73,9 +74,9 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Forbidden — Interviewer only' }, { status: 403 })
     }
 
-    // Get all admin master docs
+    // Get all available admin master docs
     const adminDocs = await prisma.document.findMany({
-      where: { docSource: 'ADMIN_MASTER' },
+      where: { docSource: 'ADMIN_MASTER', storageStatus: 'AVAILABLE' },
       orderBy: { createdAt: 'desc' },
       include: { _count: { select: { chunks: true } } },
     })
@@ -110,6 +111,9 @@ export async function POST(request: Request) {
             fileType: adminDoc.fileType,
             fileSize: adminDoc.fileSize,
             storagePath: adminDoc.storagePath, // Share the same file storage path
+            contentEtag: adminDoc.contentEtag,
+            storageStatus: adminDoc.storageStatus,
+            lastStorageCheckAt: adminDoc.lastStorageCheckAt,
             status: adminDoc.status,
             userId: session.userId,
             docSource: 'SYNCED_FROM_ADMIN',
@@ -144,6 +148,9 @@ export async function POST(request: Request) {
               fileType: adminDoc.fileType,
               fileSize: adminDoc.fileSize,
               storagePath: adminDoc.storagePath,
+              contentEtag: adminDoc.contentEtag,
+              storageStatus: adminDoc.storageStatus,
+              lastStorageCheckAt: adminDoc.lastStorageCheckAt,
               status: adminDoc.status,
             },
           })

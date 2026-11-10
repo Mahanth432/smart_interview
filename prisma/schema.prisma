@@ -24,6 +24,19 @@ model User {
   auditLogs     AuditLog[]
   candidate     Candidate?
   otps          OtpVerification[]
+  uploadIntents UploadIntent[]
+}
+
+enum DocumentStorageStatus {
+  AVAILABLE
+  MISSING
+}
+
+enum UploadIntentStatus {
+  PENDING
+  COMPLETED
+  EXPIRED
+  CANCELLED
 }
 
 model Document {
@@ -33,7 +46,11 @@ model Document {
   fileType         String
   fileSize         Int
   storagePath      String
-  status           String
+  status             String
+  storageStatus      DocumentStorageStatus @default(AVAILABLE)
+  missingAt          DateTime?
+  lastStorageCheckAt DateTime?
+  contentEtag        String?
   userId           Int
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
@@ -52,6 +69,8 @@ model Document {
   @@index([subject])
   @@index([docSource])
   @@index([adminDocId])
+  @@index([storageStatus])
+  @@index([storagePath])
 }
 
 model AppSettings {
@@ -213,3 +232,24 @@ model OtpVerification {
 }
 
 
+
+model UploadIntent {
+  id               String             @id @default(uuid())
+  userId           Int
+  docSource        String
+  storagePath      String             @unique
+  originalFilename String
+  mimeType         String
+  expectedSize     Int
+  subject          String?
+  status           UploadIntentStatus @default(PENDING)
+  documentId       Int?
+  expiresAt        DateTime
+  completedAt      DateTime?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+  user             User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, status])
+  @@index([expiresAt])
+}

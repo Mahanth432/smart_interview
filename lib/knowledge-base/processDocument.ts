@@ -1,7 +1,16 @@
 import prisma from '@/lib/db'
 import { createAuditLog } from '@/lib/audit-log'
+import { DocumentObjectNotFoundError } from '@/lib/storage/b2'
+import { confirmAndMarkStorageMissing } from './storageReconciliation'
 import { extractTextFromFile } from './extractText'
 import { EMBEDDING_DIMENSIONS, generateEmbeddingsBatch } from './embeddings'
+
+export class DocumentStorageMissingError extends Error {
+  constructor(message = 'Document file is missing from Backblaze B2 storage') {
+    super(message)
+    this.name = 'DocumentStorageMissingError'
+  }
+}
 
 const STALE_PROCESSING_MS = 3 * 60 * 1000
 
@@ -95,6 +104,9 @@ export async function processDocument(
 
   const doc = await prisma.document.findUnique({ where: { id } })
   if (!doc) throw new Error('Document not found')
+  if (doc.storageStatus === 'MISSING') {
+    throw new DocumentStorageMissingError()
+  }
 
   const staleCutoff = new Date(Date.now() - STALE_PROCESSING_MS)
   const allowedStatuses = force ? ['UPLOADED', 'FAILED', 'PROCESSED'] : ['UPLOADED', 'FAILED']
@@ -103,6 +115,7 @@ export async function processDocument(
   const claimed = await prisma.document.updateMany({
     where: {
       id,
+      storageStatus: 'AVAILABLE',
       OR: [
         { status: { in: allowedStatuses } },
         { status: 'PROCESSING', updatedAt: { lt: staleCutoff } },
@@ -114,9 +127,12 @@ export async function processDocument(
   if (claimed.count === 0) {
     const latest = await prisma.document.findUnique({
       where: { id },
-      select: { status: true },
+      select: { status: true, storageStatus: true },
     })
     if (!latest) throw new Error('Document not found')
+    if (latest.storageStatus === 'MISSING') {
+      throw new DocumentStorageMissingError()
+    }
     if (latest.status === 'PROCESSING') {
       return { status: 'ALREADY_PROCESSING' }
     }
@@ -194,6 +210,14 @@ export async function processDocument(
     return { status: 'PROCESSED', chunkCount: chunkTexts.length }
   } catch (err: unknown) {
     console.error(`[processDocument] FAILED for doc ${id}:`, err)
+    if (err instanceof DocumentObjectNotFoundError) {
+      await confirmAndMarkStorageMissing({
+        storagePath: doc.storagePath,
+        userId: auditCtx.userId ?? undefined,
+        username: auditCtx.username,
+        reason: 'missing_during_processing',
+      }).catch(() => {})
+    }
     const safeError = await markDocumentProcessingFailed(id, err, auditCtx)
     throw new Error(safeError)
   }

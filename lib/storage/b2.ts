@@ -6,7 +6,10 @@ import {
   PutObjectCommand,
   GetObjectCommand,
   DeleteObjectCommand,
+  HeadObjectCommand,
+  ListObjectsV2Command,
 } from '@aws-sdk/client-s3'
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 
 export type StorageScope = 'knowledge-docs' | 'admin-kb-docs'
 
@@ -150,7 +153,9 @@ function isS3NotFoundError(err: unknown): boolean {
     e.name === 'NoSuchKey' ||
     e.name === 'NotFound' ||
     e.Code === 'NoSuchKey' ||
+    e.Code === 'NotFound' ||
     e.code === 'NoSuchKey' ||
+    e.code === 'NotFound' ||
     e.$metadata?.httpStatusCode === 404
   )
 }
@@ -317,4 +322,187 @@ export function sanitizeDownloadFilename(originalFilename: string): string {
   const base = path.basename(originalFilename || 'document')
   const cleaned = base.replace(/["\\\r\n]/g, '_').trim()
   return cleaned || 'document'
+}
+
+export interface B2HeadObjectResult {
+  exists: boolean
+  contentLength?: number
+  contentType?: string
+  etag?: string | null
+  lastModified?: Date | null
+}
+
+export interface ListedB2Object {
+  key: string
+  size: number
+  etag: string | null
+  lastModified: Date | null
+}
+
+const ALLOWED_DOCUMENT_PREFIXES = ['admin-kb-docs/', 'knowledge-docs/'] as const
+
+export function isAllowedDocumentPrefix(prefix: string): boolean {
+  return ALLOWED_DOCUMENT_PREFIXES.some((allowed) => prefix.startsWith(allowed))
+}
+
+/**
+ * Create a short-lived presigned PUT URL for direct browser-to-B2 uploads.
+ * Prefix & ownership segment are derived purely server-side from scope/userId.
+ */
+export async function createPresignedDocumentUpload(params: {
+  scope: StorageScope
+  userId?: number
+  originalFilename: string
+  contentType: string
+  expiresInSeconds?: number
+}): Promise<{
+  uploadUrl: string
+  storagePath: string
+  expiresAt: Date
+  contentType: string
+}> {
+  if (!isB2Configured()) {
+    throw new StorageConfigurationError(
+      'Backblaze B2 direct upload is unavailable because B2 environment variables are not configured.'
+    )
+  }
+
+  if (
+    params.scope === 'knowledge-docs' &&
+    !(typeof params.userId === 'number' && Number.isInteger(params.userId) && params.userId > 0)
+  ) {
+    throw new StorageConfigurationError('Valid numeric userId is required for knowledge-docs uploads')
+  }
+
+  const config = getB2Config()
+  const client = getB2Client(config)
+  const storagePath = buildDocumentStorageKey({
+    scope: params.scope,
+    userId: params.userId,
+    originalFilename: params.originalFilename,
+  })
+
+  const contentType = (params.contentType || '').trim() || 'application/octet-stream'
+  const rawTtl = typeof params.expiresInSeconds === 'number' ? params.expiresInSeconds : 600
+  const expiresIn = Math.min(Math.max(Math.floor(rawTtl), 60), 900)
+  const expiresAt = new Date(Date.now() + expiresIn * 1000)
+
+  const command = new PutObjectCommand({
+    Bucket: config.bucketName,
+    Key: storagePath,
+    ContentType: contentType,
+  })
+
+  const uploadUrl = await getSignedUrl(client, command, { expiresIn })
+
+  return {
+    uploadUrl,
+    storagePath,
+    expiresAt,
+    contentType,
+  }
+}
+
+/**
+ * Verify whether a document object exists in B2 (or legacy local disk) and inspect its metadata.
+ * Throws on transient network, permission, or rate-limit errors so callers never treat them as 404.
+ */
+export async function headDocumentObject(storagePath: string): Promise<B2HeadObjectResult> {
+  if (!storagePath || storagePath === 'seeded') {
+    return { exists: false }
+  }
+
+  if (isLegacyLocalStoragePath(storagePath)) {
+    try {
+      const stat = await fs.promises.stat(storagePath)
+      return {
+        exists: true,
+        contentLength: stat.size,
+        lastModified: stat.mtime,
+        etag: null,
+      }
+    } catch (err: unknown) {
+      const fsErr = err as NodeJS.ErrnoException
+      if (fsErr?.code === 'ENOENT') {
+        return { exists: false }
+      }
+      throw err
+    }
+  }
+
+  const config = getB2Config()
+  const client = getB2Client(config)
+
+  try {
+    const res = await client.send(
+      new HeadObjectCommand({
+        Bucket: config.bucketName,
+        Key: storagePath,
+      })
+    )
+
+    return {
+      exists: true,
+      contentLength: typeof res.ContentLength === 'number' ? res.ContentLength : 0,
+      contentType: res.ContentType,
+      etag: res.ETag ?? null,
+      lastModified: res.LastModified ?? null,
+    }
+  } catch (err: unknown) {
+    if (isS3NotFoundError(err)) {
+      return { exists: false }
+    }
+    throw err
+  }
+}
+
+/**
+ * List B2 objects under approved document prefixes using paginated ListObjectsV2.
+ */
+export async function listDocumentObjectsByPrefixes(
+  prefixes: string[]
+): Promise<Map<string, ListedB2Object>> {
+  const validPrefixes = Array.from(new Set(prefixes.map((p) => p.trim()).filter(Boolean)))
+  if (validPrefixes.length === 0) {
+    return new Map()
+  }
+
+  for (const prefix of validPrefixes) {
+    if (!isAllowedDocumentPrefix(prefix)) {
+      throw new StorageConfigurationError(`Disallowed storage prefix requested: ${prefix}`)
+    }
+  }
+
+  const config = getB2Config()
+  const client = getB2Client(config)
+  const objects = new Map<string, ListedB2Object>()
+
+  for (const prefix of validPrefixes) {
+    let continuationToken: string | undefined
+
+    do {
+      const res = await client.send(
+        new ListObjectsV2Command({
+          Bucket: config.bucketName,
+          Prefix: prefix,
+          ContinuationToken: continuationToken,
+          MaxKeys: 1000,
+        })
+      )
+
+      for (const item of res.Contents ?? []) {
+        if (!item.Key) continue
+        objects.set(item.Key, {
+          key: item.Key,
+          size: typeof item.Size === 'number' ? item.Size : 0,
+          etag: item.ETag ?? null,
+          lastModified: item.LastModified ?? null,
+        })
+      }
+
+      continuationToken = res.IsTruncated ? res.NextContinuationToken : undefined
+    } while (continuationToken)
+  }
+
+  return objects
 }

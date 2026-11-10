@@ -102,6 +102,7 @@ export async function searchChunks(
     FROM "DocumentChunk" dc
     JOIN "Document" d ON d."id" = dc."documentId"
     WHERE d."userId" = ${userId}
+      AND d."storageStatus" = 'AVAILABLE'
       AND dc."embedding" IS NOT NULL
       ${docFilter}
     ORDER BY dc."embedding" <=> ${vectorStr}::vector ASC

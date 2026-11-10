@@ -68,7 +68,8 @@ export async function POST(req: NextRequest) {
       const existingDocs = await prisma.document.findMany({
         where: {
           id: { in: selectedDocIds },
-          userId: userId  // CRITICAL: must belong to this user
+          userId: userId,  // CRITICAL: must belong to this user
+          storageStatus: 'AVAILABLE',
         },
         select: { id: true }
       });

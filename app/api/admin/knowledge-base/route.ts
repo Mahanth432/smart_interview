@@ -1,7 +1,15 @@
 import { NextResponse } from 'next/server'
 import { getAppSession } from '@/lib/auth'
 import prisma from '@/lib/db'
-import { handleDocumentUpload, getFailedDocumentErrors } from '@/lib/knowledge-base/documentHandlers'
+import {
+  handleDocumentUpload,
+  getFailedDocumentErrors,
+  scheduleDocumentProcessing,
+} from '@/lib/knowledge-base/documentHandlers'
+import {
+  reconcileStorage,
+  type StorageSyncSummary,
+} from '@/lib/knowledge-base/storageReconciliation'
 
 export const maxDuration = 60
 
@@ -18,6 +26,24 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Forbidden — Admin only' }, { status: 403 })
     }
 
+    const reqUrl = new URL(request.url)
+    const shouldReconcile = reqUrl.searchParams.get('reconcile') !== '0'
+    let syncStatus: StorageSyncSummary | null = null
+
+    if (shouldReconcile) {
+      syncStatus = await reconcileStorage(
+        { kind: 'admin' },
+        { userId: session.userId, username: session.username, reason: 'list_admin_kb' }
+      )
+      for (const docId of syncStatus.restoredChangedDocIds) {
+        scheduleDocumentProcessing(docId, {
+          userId: session.userId,
+          username: session.username,
+          force: true,
+        })
+      }
+    }
+
     const documents = await prisma.document.findMany({
       where: { docSource: 'ADMIN_MASTER' },
       orderBy: { createdAt: 'desc' },
@@ -29,13 +55,16 @@ export async function GET(request: Request) {
     const failedIds = documents.filter((d) => d.status === 'FAILED').map((d) => d.id)
     const errorMap = await getFailedDocumentErrors(failedIds)
 
-    const safe = documents.map((d) => ({
+    const mapped = documents.map((d) => ({
       id: d.id,
       name: d.name,
       originalFilename: d.originalFilename,
       fileType: d.fileType,
       fileSize: d.fileSize,
       status: d.status,
+      storageStatus: d.storageStatus,
+      missingAt: d.missingAt,
+      lastStorageCheckAt: d.lastStorageCheckAt,
       createdAt: d.createdAt,
       updatedAt: d.updatedAt,
       docSource: d.docSource,
@@ -43,7 +72,14 @@ export async function GET(request: Request) {
       lastError: errorMap.get(d.id) ?? null,
     }))
 
-    return NextResponse.json({ documents: safe })
+    const available = mapped.filter((d) => d.storageStatus === 'AVAILABLE')
+    const missing = mapped.filter((d) => d.storageStatus === 'MISSING')
+
+    return NextResponse.json({
+      documents: available,
+      missingDocuments: missing,
+      syncStatus,
+    })
   } catch (err) {
     console.error('Admin KB fetch error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

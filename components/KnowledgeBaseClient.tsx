@@ -1,7 +1,14 @@
 'use client'
 
-import React, { useEffect, useState, useCallback } from 'react'
+import React, { useEffect, useState, useCallback, useRef } from 'react'
 import Icon from '@/components/Icon'
+import {
+  uploadDocumentDirect,
+  completeDirectUpload,
+  DirectUploadError,
+  type DirectUploadStage,
+  type StorageSyncStatus,
+} from '@/lib/knowledge-base/clientDirectUpload'
 
 type Doc = {
   id: number
@@ -10,6 +17,8 @@ type Doc = {
   fileType: string
   fileSize: number
   status: string
+  storageStatus?: 'AVAILABLE' | 'MISSING'
+  missingAt?: string | null
   docSource: string
   adminDocId: number | null
   createdAt: string
@@ -20,7 +29,22 @@ type Doc = {
 
 export const KnowledgeBaseClient = () => {
   const [docs, setDocs] = useState<Doc[]>([])
+  const [missingDocs, setMissingDocs] = useState<Doc[]>([])
+  const [syncStatus, setSyncStatus] = useState<StorageSyncStatus | null>(null)
+  const [syncingStorage, setSyncingStorage] = useState(false)
   const [loading, setLoading] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [uploadProgress, setUploadProgress] = useState<{
+    filename: string
+    index: number
+    total: number
+    percent: number
+    stage: DirectUploadStage
+  } | null>(null)
+  const [pendingRetryComplete, setPendingRetryComplete] = useState<{
+    uploadIntentId: string
+    filename: string
+  } | null>(null)
   const [fetchingKB, setFetchingKB] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
@@ -29,14 +53,18 @@ export const KnowledgeBaseClient = () => {
     syncedDocCount: number
     latestAdminUpdate: string | null
   } | null>(null)
+  const uploadAbortRef = useRef<AbortController | null>(null)
 
-  const fetchDocs = useCallback(async () => {
+  const fetchDocs = useCallback(async (reconcile = true) => {
     setLoading(true)
     try {
-      const res = await fetch('/api/documents', { cache: 'no-store', credentials: 'include' })
+      const url = reconcile ? '/api/documents' : '/api/documents?reconcile=0'
+      const res = await fetch(url, { cache: 'no-store', credentials: 'include' })
       const data = await res.json()
       if (res.ok) {
         setDocs(data.documents || [])
+        setMissingDocs(data.missingDocuments || [])
+        if (data.syncStatus) setSyncStatus(data.syncStatus)
       } else {
         setError(data.error || 'Failed to fetch documents')
       }
@@ -97,59 +125,153 @@ export const KnowledgeBaseClient = () => {
     }
   }
 
+  const handleSyncStorage = async () => {
+    setSyncingStorage(true)
+    setError(null)
+    setSuccess(null)
+    try {
+      const res = await fetch('/api/documents/sync-storage', {
+        method: 'POST',
+        credentials: 'include',
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setError(data.error || 'Storage sync failed')
+      } else {
+        const st = data.syncStatus as StorageSyncStatus
+        setSyncStatus(st)
+        if (st.ok) {
+          setSuccess(
+            `Storage sync complete (${st.checked} checked, ${st.newlyMarkedMissing} marked missing, ${st.restoredCount} restored).`
+          )
+        }
+        await fetchDocs(false)
+        await fetchAdminKBStatus()
+      }
+    } catch {
+      setError('Failed to synchronize storage with Backblaze B2')
+    } finally {
+      setSyncingStorage(false)
+    }
+  }
+
+  const handleCancelUpload = () => {
+    uploadAbortRef.current?.abort()
+  }
+
+  const handleRetryCompletion = async () => {
+    if (!pendingRetryComplete) return
+    setLoading(true)
+    setError(null)
+    try {
+      await completeDirectUpload({
+        uploadIntentId: pendingRetryComplete.uploadIntentId,
+        title: pendingRetryComplete.filename,
+      })
+      setSuccess(`Confirmed "${pendingRetryComplete.filename}" — processing in background...`)
+      setPendingRetryComplete(null)
+      await fetchDocs(false)
+      setTimeout(() => fetchDocs(false), 2000)
+      setTimeout(() => fetchDocs(false), 5000)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Retry confirmation failed')
+    } finally {
+      setLoading(false)
+    }
+  }
+
   const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || [])
     if (files.length === 0) return
 
     setError(null)
     setSuccess(null)
-    setLoading(true)
+    setPendingRetryComplete(null)
+    setUploading(true)
+    const abortController = new AbortController()
+    uploadAbortRef.current = abortController
 
     let successCount = 0
     let failCount = 0
+    let cancelled = false
     let lastUploadError = ''
 
-    for (const file of files) {
-      const fd = new FormData()
-      fd.append('file', file)
-      fd.append('title', file.name)
+    for (let i = 0; i < files.length; i++) {
+      if (abortController.signal.aborted) {
+        cancelled = true
+        break
+      }
+      const file = files[i]
+      setUploadProgress({
+        filename: file.name,
+        index: i + 1,
+        total: files.length,
+        percent: 0,
+        stage: 'initializing',
+      })
 
       try {
-        const res = await fetch('/api/documents', { method: 'POST', body: fd, credentials: 'include' })
-        if (res.ok) {
-          successCount++
-        } else {
-          let errMsg = `HTTP ${res.status}`
-          if (res.status === 413) {
-            errMsg = `"${file.name}" exceeds Vercel's 4.5 MB upload payload limit.`
-          } else {
-            try {
-              const data = await res.json()
-              if (data?.error) errMsg = data.error
-            } catch {}
+        await uploadDocumentDirect({
+          file,
+          title: file.name,
+          docSource: 'INTERVIEWER_PRIVATE',
+          signal: abortController.signal,
+          onStageChange: (stage) => {
+            setUploadProgress((prev) => (prev ? { ...prev, stage } : null))
+          },
+          onProgress: (percent) => {
+            setUploadProgress((prev) => (prev ? { ...prev, percent } : null))
+          },
+        })
+        successCount++
+      } catch (err) {
+        if (err instanceof DirectUploadError) {
+          if (err.code === 'CANCELLED') {
+            cancelled = true
+            break
           }
-          lastUploadError = errMsg
-          failCount++
+          if (err.code === 'COMPLETE_FAILED' && err.uploadIntentId) {
+            setPendingRetryComplete({
+              uploadIntentId: err.uploadIntentId,
+              filename: file.name,
+            })
+          }
+          lastUploadError = err.message
+        } else {
+          lastUploadError = err instanceof Error ? err.message : 'Upload failed'
         }
-      } catch {
-        lastUploadError = 'Network error while uploading.'
         failCount++
       }
     }
 
-    if (successCount === files.length) {
-      setSuccess(`Successfully uploaded ${successCount} document(s) — processing in background...`)
+    uploadAbortRef.current = null
+    setUploadProgress(null)
+    setUploading(false)
+    e.target.value = ''
+
+    if (cancelled) {
+      setError(
+        successCount > 0
+          ? `Upload cancelled after ${successCount} file(s) completed.`
+          : 'Upload cancelled.'
+      )
+    } else if (successCount === files.length) {
+      setSuccess(
+        `Successfully uploaded ${successCount} document(s) directly to B2 — processing in background...`
+      )
     } else if (successCount > 0) {
-      setSuccess(`Uploaded ${successCount} document(s), but ${failCount} failed.${lastUploadError ? ` (${lastUploadError})` : ''}`)
+      setSuccess(
+        `Uploaded ${successCount} document(s), but ${failCount} failed.${lastUploadError ? ` (${lastUploadError})` : ''}`
+      )
     } else {
       setError(lastUploadError || 'Upload failed for all documents.')
     }
 
-    e.target.value = ''
-    fetchDocs()
-    setTimeout(() => fetchDocs(), 2000)
-    setTimeout(() => fetchDocs(), 5000)
-    setLoading(false)
+    if (successCount > 0) {
+      fetchDocs(false)
+      setTimeout(() => fetchDocs(false), 2000)
+      setTimeout(() => fetchDocs(false), 5000)
+    }
   }
 
   const onTriggerProcess = async (id: number) => {
@@ -244,10 +366,22 @@ export const KnowledgeBaseClient = () => {
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flexWrap: 'wrap' }}>
+          {/* Sync Storage with B2 */}
+          <button
+            onClick={handleSyncStorage}
+            disabled={syncingStorage || loading || uploading}
+            className="zentra-btn zentra-btn-secondary"
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', opacity: syncingStorage ? 0.7 : 1 }}
+            title="Reconcile your documents with Backblaze B2 storage"
+          >
+            <Icon name="sync" size={16} />
+            {syncingStorage ? 'Checking B2...' : 'Sync Storage'}
+          </button>
+
           {/* Fetch Knowledge Base pill */}
           <button
             onClick={handleFetchKB}
-            disabled={fetchingKB || loading}
+            disabled={fetchingKB || loading || uploading}
             className="zentra-btn zentra-btn-secondary"
             style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', opacity: fetchingKB ? 0.7 : 1 }}
           >
@@ -258,17 +392,17 @@ export const KnowledgeBaseClient = () => {
           {/* Upload Document pill */}
           <label
             className="zentra-btn zentra-btn-primary"
-            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', cursor: loading ? 'not-allowed' : 'pointer' }}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', cursor: loading || uploading ? 'not-allowed' : 'pointer' }}
           >
             <Icon name="upload" size={16} />
-            Upload Private Document(s)
+            {uploading ? 'Uploading...' : 'Upload Private Document(s)'}
             <input
               type="file"
               multiple
               accept=".pdf,.txt,.md,.doc,.docx"
               style={{ display: 'none' }}
               onChange={handleFileChange}
-              disabled={loading}
+              disabled={loading || uploading}
             />
           </label>
         </div>
@@ -321,11 +455,48 @@ export const KnowledgeBaseClient = () => {
         </div>
       )}
 
+      {/* Direct Upload Progress */}
+      {uploadProgress && (
+        <div className="zentra-card" style={{ padding: '1rem 1.25rem' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem', gap: '1rem' }}>
+            <span style={{ fontSize: '0.875rem', fontWeight: 600, color: 'var(--color-text-primary)' }}>
+              {uploadProgress.stage === 'initializing' && `Preparing direct upload (${uploadProgress.index}/${uploadProgress.total}): ${uploadProgress.filename}`}
+              {uploadProgress.stage === 'uploading' && `Uploading directly to B2 (${uploadProgress.index}/${uploadProgress.total}): ${uploadProgress.filename} — ${uploadProgress.percent}%`}
+              {uploadProgress.stage === 'confirming' && `Confirming upload & starting processing: ${uploadProgress.filename}`}
+              {uploadProgress.stage === 'completed' && `Completed: ${uploadProgress.filename}`}
+            </span>
+            {uploadProgress.stage === 'uploading' && (
+              <button onClick={handleCancelUpload} className="zentra-btn zentra-btn-ghost" style={{ padding: '4px 10px', color: '#ef4444', fontSize: '0.78rem' }}>
+                Cancel
+              </button>
+            )}
+          </div>
+          <div style={{ height: '6px', borderRadius: '999px', background: 'rgba(148, 163, 184, 0.2)', overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${uploadProgress.percent}%`, background: '#3b82f6', transition: 'width 150ms ease' }} />
+          </div>
+        </div>
+      )}
+
+      {/* Storage Sync Outage Warning */}
+      {syncStatus && !syncStatus.ok && syncStatus.error && (
+        <div className="zentra-card" style={{ padding: '0.9rem 1.25rem', borderColor: 'rgba(245, 158, 11, 0.3)', background: 'rgba(245, 158, 11, 0.06)', color: '#d97706', display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.875rem' }}>
+          <Icon name="warning" size={18} />
+          <span>{syncStatus.error}</span>
+        </div>
+      )}
+
       {/* Error & Success Feedback */}
       {error && (
-        <div className="zentra-card" style={{ padding: '0.9rem 1.25rem', borderColor: 'rgba(239, 68, 68, 0.25)', background: 'rgba(239, 68, 68, 0.05)', color: '#ef4444', display: 'flex', alignItems: 'center', gap: '0.75rem', fontSize: '0.875rem' }}>
-          <Icon name="error" size={18} />
-          <span>{error}</span>
+        <div className="zentra-card" style={{ padding: '0.9rem 1.25rem', borderColor: 'rgba(239, 68, 68, 0.25)', background: 'rgba(239, 68, 68, 0.05)', color: '#ef4444', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.75rem', flexWrap: 'wrap', fontSize: '0.875rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+            <Icon name="error" size={18} />
+            <span>{error}</span>
+          </div>
+          {pendingRetryComplete && (
+            <button onClick={handleRetryCompletion} disabled={loading} className="zentra-btn zentra-btn-secondary" style={{ padding: '0.3rem 0.75rem', fontSize: '0.78rem' }}>
+              Retry Confirmation
+            </button>
+          )}
         </div>
       )}
       {success && (
@@ -396,8 +567,8 @@ export const KnowledgeBaseClient = () => {
           </div>
 
           <button
-            onClick={fetchDocs}
-            disabled={loading}
+            onClick={() => fetchDocs(true)}
+            disabled={loading || uploading}
             className="zentra-btn zentra-btn-ghost"
             style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.825rem' }}
           >
@@ -502,6 +673,67 @@ export const KnowledgeBaseClient = () => {
           </table>
         </div>
       </div>
+
+      {/* Storage Missing Section */}
+      {missingDocs.length > 0 && (
+        <div className="zentra-card" style={{ padding: 0, overflow: 'hidden', borderColor: 'rgba(245, 158, 11, 0.35)' }}>
+          <div style={{ padding: '1rem 1.5rem', borderBottom: '1px solid var(--color-border)', background: 'rgba(245, 158, 11, 0.05)' }}>
+            <h3 style={{ margin: 0, fontSize: '0.95rem', fontWeight: 600, color: '#d97706' }}>
+              Storage Missing ({missingDocs.length})
+            </h3>
+            <p style={{ margin: '0.25rem 0 0', fontSize: '0.8rem', color: 'var(--color-text-muted)' }}>
+              These records are excluded from RAG search and interviews because their backing files are no longer present in Backblaze B2.
+            </p>
+          </div>
+          <div style={{ overflowX: 'auto' }}>
+            <table className="zentra-table">
+              <thead>
+                <tr>
+                  <th>Document Name</th>
+                  <th>Source</th>
+                  <th>Size</th>
+                  <th>Chunks</th>
+                  <th>Detected Missing</th>
+                  <th style={{ textAlign: 'right' }}>Cleanup</th>
+                </tr>
+              </thead>
+              <tbody>
+                {missingDocs.map((d) => (
+                  <tr key={d.id}>
+                    <td>
+                      <div style={{ fontWeight: 600, color: 'var(--color-text-primary)' }}>{d.name}</div>
+                      <div style={{ fontSize: '0.75rem', color: 'var(--color-text-muted)' }}>{d.originalFilename}</div>
+                    </td>
+                    <td>
+                      {d.docSource === 'SYNCED_FROM_ADMIN' ? (
+                        <span className="zentra-badge zentra-badge-info">Admin Synced</span>
+                      ) : (
+                        <span className="zentra-badge zentra-badge-neutral">Private</span>
+                      )}
+                    </td>
+                    <td style={{ color: 'var(--color-text-secondary)', fontSize: '0.85rem' }}>{fmtSize(d.fileSize)}</td>
+                    <td style={{ color: 'var(--color-text-muted)', fontSize: '0.85rem' }}>{d.chunkCount}</td>
+                    <td style={{ color: 'var(--color-text-muted)', fontSize: '0.8rem' }}>
+                      {d.missingAt ? new Date(d.missingAt).toLocaleString() : 'Recently'}
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      <button
+                        onClick={() => onDelete(d.id, d.docSource)}
+                        disabled={loading}
+                        className="zentra-btn zentra-btn-ghost"
+                        style={{ padding: '6px 10px', color: '#ef4444', fontSize: '0.78rem' }}
+                      >
+                        <Icon name="delete" size={15} />
+                        <span style={{ marginLeft: '0.25rem' }}>Remove Stale Record</span>
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

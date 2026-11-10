@@ -31,7 +31,7 @@ export default async function AdminDashboardPage() {
       where: { score: { not: null } },
       _avg: { score: true },
     }),
-    prisma.document.count(),
+    prisma.document.count({ where: { storageStatus: 'AVAILABLE' } }),
     prisma.interviewSession.findMany({
       take: 6,
       orderBy: { startedAt: 'desc' },

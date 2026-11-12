@@ -16,10 +16,11 @@ export const AppShell = ({ children, username, role }: AppShellProps) => {
     <InterviewStateProvider>
       <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column', background: 'var(--zentra-bg-canvas)' }}>
         <Header username={username} role={role} />
-        <div style={{ display: 'flex', flex: 1, minHeight: 'calc(100vh - 72px - 40px)', position: 'relative' }}>
+        <div className="app-container" style={{ display: 'flex', flex: 1, minHeight: 'calc(100vh - 72px - 40px)', position: 'relative' }}>
           <Sidebar role={role} />
-          <main style={{
+          <main className="main-content" style={{
             flex: 1,
+            minWidth: 0,
             overflowY: 'auto',
             background: 'var(--zentra-bg-canvas)',
             display: 'flex',

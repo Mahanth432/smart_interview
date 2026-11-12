@@ -53,6 +53,7 @@ export const Sidebar = ({ role = 'INTERVIEWER' }: SidebarProps) => {
         <button
           onClick={() => setCollapsed(!collapsed)}
           aria-label="Toggle sidebar"
+          className="sidebar-toggle-btn"
           style={{
             background: 'var(--zentra-bg-muted)',
             border: '1px solid var(--zentra-border)',
@@ -72,7 +73,7 @@ export const Sidebar = ({ role = 'INTERVIEWER' }: SidebarProps) => {
       </div>
 
       {/* Pill Navigation List */}
-      <nav style={{ flex: 1, padding: '1rem 0.75rem', overflowY: 'auto' }}>
+      <nav className="sidebar-nav" style={{ flex: 1, padding: '1rem 0.75rem', overflowY: 'auto' }}>
         <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: '0.35rem' }}>
           {navItems.map((item) => {
             // Strip query string for base path comparison
@@ -123,7 +124,7 @@ export const Sidebar = ({ role = 'INTERVIEWER' }: SidebarProps) => {
                     <Icon name={item.icon} size={19} />
                   </div>
                   {!collapsed && (
-                    <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    <span className="nav-text" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                       {item.text}
                     </span>
                   )}
@@ -136,7 +137,7 @@ export const Sidebar = ({ role = 'INTERVIEWER' }: SidebarProps) => {
 
       {/* System Status Footnote Card - Admin / Interviewer internal readiness */}
       {!collapsed && role !== 'CANDIDATE' && (
-        <div style={{ padding: '0.85rem 1rem', borderTop: '1px solid var(--zentra-border-subtle)' }}>
+        <div className="sidebar-footer" style={{ padding: '0.85rem 1rem', borderTop: '1px solid var(--zentra-border-subtle)' }}>
           <div style={{
             background: 'var(--zentra-bg-muted)',
             border: '1px solid var(--zentra-border)',

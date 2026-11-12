@@ -1,14 +1,29 @@
 import { NextResponse } from 'next/server'
 import bcrypt from 'bcryptjs'
 import prisma from '@/lib/db'
-import { getAppSession, getServerInstanceId } from '@/lib/auth'
-import { createAuditLog } from '@/lib/audit-log'
+import { establishUserSession } from '@/lib/auth-server'
+import { createAuditLog, extractRequestMetadata } from '@/lib/audit-log'
+import { checkRateLimit, extractClientIp, rateLimitResponse } from '@/lib/rate-limit'
 
 export async function POST(request: Request) {
   try {
     if (!process.env.DATABASE_URL) {
       console.error('Missing DATABASE_URL environment variable')
       return NextResponse.json({ error: 'Server misconfiguration' }, { status: 500 })
+    }
+
+    const reqMeta = extractRequestMetadata(request)
+    const clientIp = extractClientIp(request)
+    const ipLimit = await checkRateLimit({
+      key: `login:ip:${clientIp}`,
+      limit: 20,
+      windowSeconds: 15 * 60,
+    })
+    if (!ipLimit.allowed) {
+      return rateLimitResponse(
+        ipLimit.retryAfterSeconds,
+        'Too many login attempts from your network. Please wait before trying again.'
+      )
     }
 
     const { username, password } = await request.json()
@@ -20,10 +35,22 @@ export async function POST(request: Request) {
       )
     }
 
-    const trimmedInput = username.trim()
+    const trimmedInput = String(username).trim()
     const normalizedInput = trimmedInput.toLowerCase()
 
-    // Look up user by username (case-insensitive) OR normalized email
+    const userLimit = await checkRateLimit({
+      key: `login:acct:${normalizedInput}`,
+      limit: 10,
+      windowSeconds: 15 * 60,
+    })
+    if (!userLimit.allowed) {
+      return rateLimitResponse(
+        userLimit.retryAfterSeconds,
+        'Too many login attempts for this account. Please wait before trying again.'
+      )
+    }
+
+    // Look up user deterministically by username (case-insensitive) OR normalized email
     const user = await prisma.user.findFirst({
       where: {
         OR: [
@@ -32,36 +59,33 @@ export async function POST(request: Request) {
           { email: normalizedInput },
         ],
       },
+      orderBy: { id: 'asc' },
     })
 
-    // Generic error for non-existent user to prevent account enumeration
     if (!user) {
       createAuditLog({
         username: trimmedInput,
         action: 'AUTH_LOGIN_FAILURE',
         status: 'FAILURE',
         metadata: { reason: 'User not found' },
+        ...reqMeta,
       })
-      return NextResponse.json(
-        { error: 'Invalid credentials' },
-        { status: 401 }
-      )
+      return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 })
     }
 
-    // Legacy account without password
+    // Legacy account without password: do not leak arbitrary stored email; echo setup flow safely
     if (!user.passwordHash) {
       return NextResponse.json(
         {
           requiresPasswordSetup: true,
-          email: user.email || user.username,
-          message: 'Your account requires a password to be set before signing in.',
+          email: user.email || (trimmedInput.includes('@') ? normalizedInput : ''),
+          message: 'Your account requires OTP-verified password setup before signing in.',
         },
         { status: 403 }
       )
     }
 
-    // Validate password
-    const isPasswordValid = await bcrypt.compare(password, user.passwordHash)
+    const isPasswordValid = await bcrypt.compare(String(password), user.passwordHash)
     if (!isPasswordValid) {
       createAuditLog({
         userId: user.id,
@@ -69,14 +93,11 @@ export async function POST(request: Request) {
         action: 'AUTH_LOGIN_FAILURE',
         status: 'FAILURE',
         metadata: { reason: 'Incorrect password', role: user.role },
+        ...reqMeta,
       })
-      return NextResponse.json(
-        { error: 'Invalid credentials' },
-        { status: 401 }
-      )
+      return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 })
     }
 
-    // For non-admin accounts, require email verification
     if (user.role !== 'ADMIN' && !user.emailVerified) {
       createAuditLog({
         userId: user.id,
@@ -84,14 +105,17 @@ export async function POST(request: Request) {
         action: 'AUTH_LOGIN_FAILURE',
         status: 'FAILURE',
         metadata: { reason: 'Email not verified', role: user.role },
+        ...reqMeta,
       })
       return NextResponse.json(
-        { error: 'Your email address has not been verified. Please complete registration or contact support.' },
+        {
+          error:
+            'Your email address has not been verified. Please complete registration or contact support.',
+        },
         { status: 403 }
       )
     }
 
-    // Determine redirect based on database role
     const redirectMap: Record<string, string> = {
       ADMIN: '/admin',
       INTERVIEWER: '/dashboard',
@@ -99,15 +123,8 @@ export async function POST(request: Request) {
     }
     const redirect = redirectMap[user.role] || '/dashboard'
 
-    // Create authenticated session
     const response = NextResponse.json({ success: true, redirect })
-    const session = await getAppSession(request, response)
-    session.userId = user.id
-    session.username = user.username
-    session.role = user.role
-    session.instanceId = getServerInstanceId()
-    session.isLoggedIn = true
-    await session.save()
+    await establishUserSession(request, response, user)
 
     createAuditLog({
       userId: user.id,
@@ -115,14 +132,12 @@ export async function POST(request: Request) {
       action: 'AUTH_LOGIN_SUCCESS',
       status: 'SUCCESS',
       metadata: { role: user.role },
+      ...reqMeta,
     })
 
     return response
   } catch (error) {
     console.error('Login error:', error)
-    return NextResponse.json(
-      { error: 'Internal server error' },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 })
   }
 }

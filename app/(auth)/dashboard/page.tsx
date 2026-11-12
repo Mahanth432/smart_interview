@@ -4,28 +4,33 @@ import { RecentInterviews } from '@/components/dashboard/RecentInterviews'
 import { ScoreChartWrapper } from '@/components/dashboard/ScoreChartWrapper'
 import Icon from '@/components/Icon'
 import prisma from '@/lib/db'
-import { getAppSession } from '@/lib/auth'
+import { getValidatedAppSession } from '@/lib/auth-server'
+import { expireStaleSessions } from '@/lib/interview/lifecycle'
 import Link from 'next/link'
 
 export const dynamic = 'force-dynamic'
 
 export default async function DashboardPage() {
   const t0 = performance.now()
-  const session = await getAppSession()
+  const session = await getValidatedAppSession()
   const tSession = performance.now()
-  const userId = session.userId
+  const userId = session.isLoggedIn ? session.userId : undefined
 
   if (!userId) {
     return <div style={{ padding: '2rem', color: 'var(--zentra-text-primary)' }}>Unauthorized</div>
   }
 
+  await expireStaleSessions().catch(() => {})
+
   // Fetch real interviewer data from DB in parallel
   const tQuery0 = performance.now()
-  const [totalSessions, completedSessions, activeSession, recentSessions, scoreAgg] = await Promise.all([
+  const [totalSessions, completedSessions, activeSessionCount, activeSession, recentSessions, scoredTrendRows, scoreAgg] = await Promise.all([
     prisma.interviewSession.count({ where: { interviewerId: userId } }),
     prisma.interviewSession.count({ where: { status: 'completed', interviewerId: userId } }),
+    prisma.interviewSession.count({ where: { status: { in: ['active', 'paused'] }, interviewerId: userId } }),
     prisma.interviewSession.findFirst({
-      where: { status: 'active', interviewerId: userId },
+      where: { status: { in: ['active', 'paused'] }, interviewerId: userId },
+      orderBy: { startedAt: 'desc' },
       select: {
         id: true,
         candidate: { select: { name: true } },
@@ -44,6 +49,16 @@ export default async function DashboardPage() {
         candidate: { select: { name: true } },
       },
     }),
+    prisma.interviewSession.findMany({
+      where: { interviewerId: userId, score: { not: null } },
+      orderBy: { startedAt: 'asc' },
+      take: 14,
+      select: {
+        startedAt: true,
+        score: true,
+        candidate: { select: { name: true } },
+      },
+    }),
     prisma.interviewSession.aggregate({
       where: { interviewerId: userId, score: { not: null } },
       _avg: { score: true },
@@ -52,6 +67,10 @@ export default async function DashboardPage() {
   const tQueryEnd = performance.now()
 
   const avgScore = scoreAgg._avg.score !== null ? Math.round(scoreAgg._avg.score * 10) / 10 : null
+  const scoreTrend = scoredTrendRows.map((row) => ({
+    label: `${row.candidate?.name ? row.candidate.name.split(' ')[0] + ' ' : ''}${new Date(row.startedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`,
+    score: row.score ?? 0,
+  }))
 
   if (process.env.NODE_ENV === 'development') {
     console.log(`[DEV TIMING] DashboardPage: session=${(tSession - t0).toFixed(1)}ms, queries=${(tQueryEnd - tQuery0).toFixed(1)}ms, total=${(performance.now() - t0).toFixed(1)}ms`)
@@ -89,6 +108,7 @@ export default async function DashboardPage() {
         totalSessions={totalSessions}
         completedSessions={completedSessions}
         activeSession={activeSession}
+        activeSessionCount={activeSessionCount}
         averageScore={avgScore}
       />
 
@@ -106,7 +126,7 @@ export default async function DashboardPage() {
             </div>
 
             <div style={{ minHeight: '280px', width: '100%' }}>
-              <ScoreChartWrapper />
+              <ScoreChartWrapper data={scoreTrend} />
             </div>
           </div>
 

@@ -17,14 +17,16 @@ model User {
   name          String?
   passwordHash  String?
   role          String             @default("INTERVIEWER")
-  emailVerified Boolean            @default(false)
+  emailVerified       Boolean              @default(false)
+  tokenVersion        Int                  @default(1)
   createdAt     DateTime           @default(now())
   documents     Document[]
   sessions      InterviewSession[]
   auditLogs     AuditLog[]
   candidate     Candidate?
   otps          OtpVerification[]
-  uploadIntents UploadIntent[]
+  uploadIntents       UploadIntent[]
+  passwordResetTokens PasswordResetToken[]
 }
 
 enum DocumentStorageStatus {
@@ -107,7 +109,10 @@ model Candidate {
   createdAt DateTime           @default(now())
   sessions  InterviewSession[]
   userId    Int?               @unique
-  user      User?              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user           User?                     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  profile        CandidateProfile?
+  conceptMastery CandidateConceptMastery[]
+  revisions      RevisionRecommendation[]
 }
 
 model InterviewSession {
@@ -117,7 +122,9 @@ model InterviewSession {
   status        String           @default("active")
   difficulty    String           @default("medium")
   interviewType String
-  scope         Json?
+  scope              Json?
+  pendingSuggestions Json?
+  pausedAt           DateTime?
   score         Float?
   topicsCovered String[]
   weakTopics    String[]
@@ -129,6 +136,10 @@ model InterviewSession {
   interviewer   User?            @relation(fields: [interviewerId], references: [id])
   gaps          KnowledgeGap[]
   questions     Question[]
+
+  @@index([candidateId])
+  @@index([interviewerId])
+  @@index([status])
 }
 
 model Question {
@@ -142,9 +153,12 @@ model Question {
   expectedAnswer   String?
   coreConcepts     String[]
   requiredKeywords String[]
+  sourceReferences Json?
   askedAt          DateTime         @default(now())
   answer           Answer?
   session          InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
 }
 
 model Answer {
@@ -168,6 +182,12 @@ model AnswerEvaluation {
   technicalAccuracy String
   mentionedKeywords String[]
   missingKeywords   String[]
+  correctConcepts   String[] @default([])
+  missingConcepts   String[] @default([])
+  incorrectConcepts String[] @default([])
+  reasoningQuality      String   @default("")
+  communicationScore    Float?
+  communicationFeedback String   @default("")
   feedback          String
   answer            Answer   @relation(fields: [answerId], references: [id], onDelete: Cascade)
 }
@@ -179,6 +199,8 @@ model KnowledgeGap {
   confidence String
   evidence   String
   session    InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@index([sessionId])
 }
 
 model InterviewReport {
@@ -189,7 +211,15 @@ model InterviewReport {
   strengths        String[]
   weaknesses       String[]
   executiveSummary String
-  improvementPlan  String
+  improvementPlan    String
+  aiExecutiveSummary String?
+  aiStrengths        String[]         @default([])
+  aiWeaknesses       String[]         @default([])
+  aiImprovementPlan  String?
+  interviewerNotes   String?
+  editedByUserId     Int?
+  editedByName       String?
+  editedAt           DateTime?
   createdAt        DateTime         @default(now())
   session          InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 }
@@ -252,4 +282,87 @@ model UploadIntent {
 
   @@index([userId, status])
   @@index([expiresAt])
+}
+
+model RateLimit {
+  key       String   @id
+  count     Int      @default(1)
+  resetAt   DateTime
+  updatedAt DateTime @updatedAt
+
+  @@index([resetAt])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(uuid())
+  tokenHash String    @unique
+  userId    Int
+  email     String
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model CandidateProfile {
+  id                  String    @id @default(uuid())
+  candidateId         String    @unique
+  answeringStyle      String    @default("")
+  reasoningPattern    String    @default("")
+  technicalStrengths  String[]  @default([])
+  communicationTraits String[]  @default([])
+  learningPreferences String[]  @default([])
+  totalEvaluations    Int       @default(0)
+  averageScore        Float?
+  lastAnalyzedAt      DateTime?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  candidate           Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+}
+
+model CandidateConceptMastery {
+  id                  String    @id @default(uuid())
+  candidateId         String
+  conceptKey          String
+  conceptName         String
+  subject             String    @default("General")
+  masteryScore        Float     @default(0)
+  attemptCount        Int       @default(0)
+  weaknessCount       Int       @default(0)
+  lastScore           Float?
+  lastTestedAt        DateTime  @default(now())
+  forgettingRisk      Float     @default(0)
+  recommendedReviewAt DateTime?
+  linkedDocumentId    Int?
+  linkedDocumentName  String?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  candidate           Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@unique([candidateId, conceptKey])
+  @@index([candidateId])
+  @@index([candidateId, forgettingRisk])
+  @@index([candidateId, weaknessCount])
+}
+
+model RevisionRecommendation {
+  id                 String    @id @default(uuid())
+  candidateId        String
+  conceptName        String
+  subject            String    @default("General")
+  priorityScore      Float
+  forgettingRisk     Float     @default(0)
+  reason             String
+  linkedDocumentId   Int?
+  linkedDocumentName String?
+  status             String    @default("pending")
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+  candidate          Candidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@index([candidateId, status])
+  @@index([candidateId, priorityScore])
 }

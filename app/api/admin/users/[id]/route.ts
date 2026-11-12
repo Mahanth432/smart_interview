@@ -164,21 +164,49 @@ export async function PATCH(
           )
         }
       }
+      if (nextRole !== existing.role) {
+        updateData.tokenVersion = { increment: 1 }
+      }
       updateData.role = nextRole
     }
 
-    const updated = await prisma.user.update({
-      where: { id: targetUserId },
-      data: updateData,
-      select: {
-        id: true,
-        username: true,
-        email: true,
-        name: true,
-        role: true,
-        emailVerified: true,
-        createdAt: true,
-      },
+    if (Object.keys(updateData).length === 0) {
+      return NextResponse.json({ error: 'No valid fields provided for update.' }, { status: 400 })
+    }
+
+    const updated = await prisma.$transaction(async (tx) => {
+      const u = await tx.user.update({
+        where: { id: targetUserId },
+        data: updateData,
+        select: {
+          id: true,
+          username: true,
+          email: true,
+          name: true,
+          role: true,
+          emailVerified: true,
+          createdAt: true,
+        },
+      })
+
+      // Keep Candidate profile synchronized when editing a CANDIDATE user
+      if (u.role === 'CANDIDATE') {
+        const displayName = u.name || u.username
+        await tx.candidate.upsert({
+          where: { userId: u.id },
+          update: {
+            name: displayName,
+            email: u.email,
+          },
+          create: {
+            userId: u.id,
+            name: displayName,
+            email: u.email,
+          },
+        })
+      }
+
+      return u
     })
 
     createAuditLog({

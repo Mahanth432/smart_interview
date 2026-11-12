@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
-import { getAppSession } from '@/lib/auth'
+import { getValidatedAppSession } from '@/lib/auth-server'
+import { parsePaginationParams, parseDateRange } from '@/lib/validation/query'
 import prisma from '@/lib/db'
 import { sanitizeMetadata } from '@/lib/audit-log'
 import { Prisma } from '@prisma/client'
@@ -7,7 +8,7 @@ import { Prisma } from '@prisma/client'
 export async function GET(request: Request) {
   try {
     const response = NextResponse.json({})
-    const session = await getAppSession(request, response)
+    const session = await getValidatedAppSession(request, response)
 
     if (!session?.isLoggedIn || !session.userId) {
       return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 })
@@ -18,14 +19,18 @@ export async function GET(request: Request) {
     }
 
     const { searchParams } = new URL(request.url)
-    const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10))
-    const limit = Math.max(1, Math.min(100, parseInt(searchParams.get('limit') || '25', 10)))
+    const { page, limit, skip } = parsePaginationParams(searchParams, { defaultLimit: 25, maxLimit: 100 })
+    // limit parsed via parsePaginationParams above
     const action = searchParams.get('action') || ''
     const status = searchParams.get('status') || ''
     const userIdStr = searchParams.get('userId') || ''
     const search = searchParams.get('search') || ''
     const fromStr = searchParams.get('from') || ''
     const toStr = searchParams.get('to') || ''
+    const dateRange = parseDateRange(fromStr, toStr)
+    if (!dateRange.ok) {
+      return NextResponse.json({ error: dateRange.error }, { status: 400 })
+    }
 
     const where: Prisma.AuditLogWhereInput = {}
 
@@ -69,7 +74,7 @@ export async function GET(request: Request) {
       prisma.auditLog.findMany({
         where,
         orderBy: { createdAt: 'desc' },
-        skip: (page - 1) * limit,
+        skip,
         take: limit,
       }),
     ])

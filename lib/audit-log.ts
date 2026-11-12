@@ -72,6 +72,21 @@ export function sanitizeMetadata(
  * Creates an audit log record safely and asynchronously.
  * Guaranteed best-effort/non-blocking execution (never throws).
  */
+export function extractRequestMetadata(request: Request): {
+  ipAddress: string | null
+  userAgent: string | null
+} {
+  const forwarded = request.headers.get('x-forwarded-for')
+  const firstForwardedIp = forwarded ? forwarded.split(',')[0]?.trim() : ''
+  const realIp = request.headers.get('x-real-ip')?.trim() || ''
+  const ipAddress = firstForwardedIp || realIp || null
+
+  const rawUa = request.headers.get('user-agent')?.trim() || ''
+  const userAgent = rawUa ? rawUa.slice(0, 250) : null
+
+  return { ipAddress, userAgent }
+}
+
 export async function createAuditLog(params: CreateAuditLogParams): Promise<void> {
   try {
     const sanitizedMeta = params.metadata ? sanitizeMetadata(params.metadata) : null

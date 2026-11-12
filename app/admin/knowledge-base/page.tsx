@@ -48,10 +48,10 @@ export default function AdminKnowledgeBasePage() {
   const [success, setSuccess] = useState<string | null>(null)
   const uploadAbortRef = useRef<AbortController | null>(null)
 
-  const fetchDocs = useCallback(async (reconcile = true) => {
+  const fetchDocs = useCallback(async (reconcile = false) => {
     setLoading(true)
     try {
-      const url = reconcile ? '/api/admin/knowledge-base' : '/api/admin/knowledge-base?reconcile=0'
+      const url = reconcile ? '/api/admin/knowledge-base?reconcile=1' : '/api/admin/knowledge-base'
       const res = await fetch(url, { cache: 'no-store', credentials: 'include' })
       const data = await res.json()
       if (res.ok) {
@@ -69,8 +69,23 @@ export default function AdminKnowledgeBasePage() {
   }, [])
 
   useEffect(() => {
-    fetchDocs(true)
+    fetchDocs(false)
   }, [fetchDocs])
+
+  const hasPendingDocs = docs.some((d) => d.status === 'UPLOADED' || d.status === 'PROCESSING')
+  useEffect(() => {
+    if (!hasPendingDocs) return
+    let polls = 0
+    const interval = setInterval(() => {
+      polls++
+      if (polls > 24) {
+        clearInterval(interval)
+        return
+      }
+      fetchDocs(false)
+    }, 2500)
+    return () => clearInterval(interval)
+  }, [hasPendingDocs, fetchDocs])
 
   const handleSyncStorage = async () => {
     setSyncingStorage(true)
@@ -217,8 +232,6 @@ export default function AdminKnowledgeBasePage() {
 
     if (successCount > 0) {
       fetchDocs(false)
-      setTimeout(() => fetchDocs(false), 2000)
-      setTimeout(() => fetchDocs(false), 5000)
     }
   }
 
@@ -306,7 +319,7 @@ export default function AdminKnowledgeBasePage() {
             <input
               type="file"
               multiple
-              accept=".pdf,.txt,.md,.doc,.docx"
+              accept=".pdf,.txt,.md,.docx"
               style={{ display: 'none' }}
               onChange={handleFileChange}
               disabled={loading || uploading}

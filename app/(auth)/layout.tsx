@@ -1,7 +1,7 @@
 import React from 'react'
 import { redirect } from 'next/navigation'
 
-import { getAppSession } from '@/lib/auth'
+import { getValidatedAppSession } from '@/lib/auth-server'
 import { AppShell } from '@/components/AppShell'
 
 export default async function AuthLayout({
@@ -10,10 +10,10 @@ export default async function AuthLayout({
   children: React.ReactNode
 }) {
   const t0 = performance.now()
-  const session = await getAppSession()
+  const session = await getValidatedAppSession()
 
   if (!session.isLoggedIn) {
-    redirect('/api/auth/logout')
+    redirect('/login')
   }
 
   if (process.env.NODE_ENV === 'development') {

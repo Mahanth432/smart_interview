@@ -1,5 +1,5 @@
 import React from 'react'
-import { getAppSession } from '@/lib/auth'
+import { getValidatedAppSession } from '@/lib/auth-server'
 import { redirect } from 'next/navigation'
 import { SettingsClient } from '@/components/settings/SettingsClient'
 
@@ -7,10 +7,10 @@ export const dynamic = 'force-dynamic'
 
 export default async function SettingsPage() {
   const t0 = performance.now()
-  const session = await getAppSession()
+  const session = await getValidatedAppSession()
 
   if (!session.isLoggedIn) {
-    redirect('/api/auth/logout')
+    redirect('/login')
   }
 
   if (process.env.NODE_ENV === 'development') {

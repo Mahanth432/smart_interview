@@ -25,15 +25,48 @@ ChartJS.register(
   Legend
 )
 
-export const ScoreChart = () => {
+export interface ScoreChartPoint {
+  label: string
+  score: number
+}
+
+export const ScoreChart = ({ data: points = [] }: { data?: ScoreChartPoint[] }) => {
   const chartRef = useRef<ChartJS<'line'>>(null)
 
+  if (!points || points.length === 0) {
+    return (
+      <div
+        style={{
+          height: '260px',
+          width: '100%',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '0.4rem',
+          background: 'var(--zentra-bg-muted)',
+          borderRadius: '14px',
+          border: '1px dashed var(--zentra-border)',
+          color: 'var(--zentra-text-muted)',
+          fontSize: '0.85rem',
+          padding: '1.5rem',
+          textAlign: 'center',
+        }}
+      >
+        <strong style={{ color: 'var(--zentra-text-secondary)', fontWeight: 600 }}>
+          No scored evaluations yet
+        </strong>
+        <span>Complete at least one interview evaluation to display score progression.</span>
+      </div>
+    )
+  }
+
   const data = {
-    labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+    labels: points.map((p) => p.label),
     datasets: [
       {
-        label: 'Candidate Score',
-        data: [72, 75, 78, 85, 82, 88, 89],
+        label: 'Evaluation Score',
+        data: points.map((p) => Math.round(p.score * 10) / 10),
         borderColor: '#2563eb',
         backgroundColor: (context: { chart: { ctx: CanvasRenderingContext2D } }) => {
           const ctx = context.chart.ctx
@@ -49,7 +82,7 @@ export const ScoreChart = () => {
         pointRadius: 4,
         pointHoverRadius: 6,
         fill: true,
-        tension: 0.4,
+        tension: 0.35,
       },
     ],
   }
@@ -58,9 +91,7 @@ export const ScoreChart = () => {
     responsive: true,
     maintainAspectRatio: false,
     plugins: {
-      legend: {
-        display: false,
-      },
+      legend: { display: false },
       tooltip: {
         backgroundColor: '#0f172a',
         titleColor: '#ffffff',
@@ -69,8 +100,8 @@ export const ScoreChart = () => {
         cornerRadius: 8,
         displayColors: false,
         callbacks: {
-          label: function(context: { parsed: { y: number | null } }) {
-            return `Score: ${context.parsed.y ?? 0}%`;
+          label: function (context: { parsed: { y: number | null } }) {
+            return `Score: ${context.parsed.y ?? 0}%`
           },
         },
       },
@@ -80,33 +111,19 @@ export const ScoreChart = () => {
         beginAtZero: true,
         max: 100,
         border: { dash: [4, 4] },
-        grid: {
-          color: 'rgba(226, 232, 240, 0.6)',
-        },
-        ticks: {
-          color: '#94a3b8',
-          stepSize: 20,
-          font: { size: 11, family: 'Inter' },
-        },
+        grid: { color: 'rgba(226, 232, 240, 0.6)' },
+        ticks: { color: '#94a3b8', stepSize: 20, font: { size: 11, family: 'Inter' } },
       },
       x: {
-        grid: {
-          display: false,
-        },
-        ticks: {
-          color: '#94a3b8',
-          font: { size: 11, family: 'Inter' },
-        },
+        grid: { display: false },
+        ticks: { color: '#94a3b8', font: { size: 11, family: 'Inter' } },
       },
     },
-    interaction: {
-      intersect: false,
-      mode: 'index' as const,
-    },
+    interaction: { intersect: false, mode: 'index' as const },
   }
 
   return (
-    <div style={{ height: '100%', width: '100%' }}>
+    <div style={{ height: '260px', width: '100%' }}>
       <Line ref={chartRef} data={data} options={options} />
     </div>
   )

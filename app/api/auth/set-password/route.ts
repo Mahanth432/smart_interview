@@ -1,150 +1,207 @@
-import { NextResponse } from 'next/server';
-import bcrypt from 'bcryptjs';
-import prisma from '@/lib/db';
-import { generateSecureOtp, hashOtp } from '@/lib/otp';
-import { sendOtpEmail } from '@/lib/mail';
-import { createAuditLog } from '@/lib/audit-log';
+import { NextResponse } from 'next/server'
+import bcrypt from 'bcryptjs'
+import prisma from '@/lib/db'
+import { sendOtpEmail } from '@/lib/mail'
+import { createAuditLog } from '@/lib/audit-log'
+import { checkEmailOtpQuota, issueOtpForEmail, verifyAndConsumeOtp } from '@/lib/otp-store'
+import { checkRateLimit, extractClientIp, rateLimitResponse } from '@/lib/rate-limit'
+import { normalizeEmail, validateEmail, validatePasswordStrength } from '@/lib/validation/user'
 
-const PASSWORD_MIN_LENGTH = 8;
-
-function validatePasswordStrength(password: string): string | null {
-  if (password.length < PASSWORD_MIN_LENGTH) {
-    return `Password must be at least ${PASSWORD_MIN_LENGTH} characters.`;
-  }
-  if (!/[0-9!@#$%^&*()_+\-=\[\]{}|;:,.<>?]/.test(password)) {
-    return 'Password must contain at least one number or special character.';
-  }
-  return null;
+const GENERIC_OTP_SENT_RESPONSE = {
+  success: true,
+  otpRequired: true,
+  message:
+    'If an eligible account requires password setup, a 6-digit verification code has been sent to your email.',
 }
 
-/**
- * POST /api/auth/set-password
- *
- * Allows existing Candidate/Interviewer accounts that were previously
- * created without a password (passwordHash = null) to set a new password.
- * This is the ONLY safe upgrade path — accounts are never deleted.
- *
- * Body: { email, newPassword, role }
- * Returns: { otpRequired: true, email, role } — UI then shows OTP step
- */
 export async function POST(request: Request) {
   try {
-    const body = await request.json();
-    const { email, newPassword, role } = body;
-
-    if (!email || !newPassword || !role) {
-      return NextResponse.json(
-        { error: 'Email, new password, and role are required.' },
-        { status: 400 }
-      );
+    const clientIp = extractClientIp(request)
+    const ipLimit = await checkRateLimit({
+      key: `set-password:ip:${clientIp}`,
+      limit: 10,
+      windowSeconds: 15 * 60,
+    })
+    if (!ipLimit.allowed) {
+      return rateLimitResponse(
+        ipLimit.retryAfterSeconds,
+        'Too many password setup attempts. Please wait before trying again.'
+      )
     }
 
-    if (role === 'ADMIN') {
-      return NextResponse.json(
-        { error: 'Admin password changes must be performed by a system administrator.' },
-        { status: 403 }
-      );
+    const body = await request.json()
+    const { action, email, otp, newPassword } = body
+
+    const normalizedEmail = normalizeEmail(email)
+    const emailError = validateEmail(normalizedEmail)
+    if (emailError) {
+      return NextResponse.json({ error: emailError }, { status: 400 })
     }
 
-    if (role !== 'CANDIDATE' && role !== 'INTERVIEWER') {
-      return NextResponse.json({ error: 'Invalid role.' }, { status: 400 });
-    }
+    // Mode 1: Request OTP for legacy passwordless account setup (never mutates passwordHash)
+    if (action === 'request-otp') {
+      const quota = await checkEmailOtpQuota(normalizedEmail, 'PASSWORD_SETUP')
+      if (!quota.allowed) {
+        if (quota.reason === 'cooldown') {
+          return rateLimitResponse(
+            quota.retryAfterSeconds || 60,
+            `Please wait ${quota.retryAfterSeconds || 60} seconds before requesting another code.`
+          )
+        }
+        return rateLimitResponse(
+          quota.retryAfterSeconds || 3600,
+          'Too many setup requests for this email. Please try again in an hour.'
+        )
+      }
 
-    const normalizedEmail = email.trim().toLowerCase();
-
-    const passwordError = validatePasswordStrength(newPassword);
-    if (passwordError) {
-      return NextResponse.json({ error: passwordError }, { status: 400 });
-    }
-
-    // Find the user by email
-    const user = await prisma.user.findFirst({
-      where: {
-        OR: [
-          { email: normalizedEmail },
-          { username: normalizedEmail },
-          { candidate: { email: normalizedEmail } },
-        ],
-        role,
-      },
-    });
-
-    if (!user) {
-      // Generic response to avoid account enumeration
-      return NextResponse.json(
-        { error: 'No account found with that email for the selected role.' },
-        { status: 404 }
-      );
-    }
-
-    // This endpoint is ONLY for accounts without a password
-    if (user.passwordHash !== null) {
-      return NextResponse.json(
-        {
-          error:
-            'This account already has a password. Use the login page to sign in, or contact support to reset your password.',
+      const user = await prisma.user.findFirst({
+        where: {
+          OR: [
+            { email: normalizedEmail },
+            { username: normalizedEmail },
+            { candidate: { email: normalizedEmail } },
+          ],
         },
-        { status: 409 }
-      );
+        orderBy: { id: 'asc' },
+      })
+
+      if (user && user.passwordHash === null) {
+        const { otp: code } = await issueOtpForEmail({
+          userId: user.id,
+          email: normalizedEmail,
+          purpose: 'PASSWORD_SETUP',
+        })
+
+        const sent = await sendOtpEmail({
+          email: normalizedEmail,
+          otp: code,
+          role: user.role,
+          purpose: 'EMAIL_VERIFICATION',
+        })
+
+        if (!sent && process.env.NODE_ENV === 'production') {
+          return NextResponse.json(
+            { error: 'Failed to send verification email. Please try again.' },
+            { status: 500 }
+          )
+        }
+
+        createAuditLog({
+          userId: user.id,
+          username: user.username,
+          action: 'PASSWORD_SETUP_OTP_SENT',
+          status: 'SUCCESS',
+          metadata: { email: normalizedEmail, role: user.role },
+        })
+      }
+
+      // Uniform non-enumerating response whether user exists, already has password, or needs setup
+      return NextResponse.json(GENERIC_OTP_SENT_RESPONSE)
     }
 
-    // Hash and store the new password
-    const passwordHash = await bcrypt.hash(newPassword, 12);
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { passwordHash },
-    });
+    // Mode 2: Verify OTP BEFORE writing passwordHash
+    if (!otp || !newPassword) {
+      return NextResponse.json(
+        { error: 'Verification code (OTP) and new password are required.' },
+        { status: 400 }
+      )
+    }
 
-    // Invalidate any previous unused OTPs for this email
-    await prisma.otpVerification.updateMany({
-      where: { email: normalizedEmail, usedAt: null },
-      data: { usedAt: new Date() },
-    });
+    const cleanOtp = String(otp).trim()
+    if (!/^\d{6}$/.test(cleanOtp)) {
+      return NextResponse.json(
+        { error: 'Verification code must be a 6-digit number.' },
+        { status: 400 }
+      )
+    }
 
-    // Generate and send OTP so they can verify immediately
-    const otp = generateSecureOtp();
-    const otpHash = hashOtp(otp);
+    const passwordError = validatePasswordStrength(newPassword)
+    if (passwordError) {
+      return NextResponse.json({ error: passwordError }, { status: 400 })
+    }
 
-    await prisma.otpVerification.create({
-      data: {
-        userId: user.id,
-        email: normalizedEmail,
-        otpHash,
-        purpose: 'EMAIL_VERIFICATION',
-        expiresAt: new Date(Date.now() + 5 * 60 * 1000),
-        attempts: 0,
-      },
-    });
+    // Consume OTP atomically BEFORE checking or mutating passwordHash
+    const otpResult = await verifyAndConsumeOtp({
+      email: normalizedEmail,
+      otp: cleanOtp,
+      purpose: 'PASSWORD_SETUP',
+    })
 
-    try {
-      await sendOtpEmail({
-        email: normalizedEmail,
-        otp,
-        role: user.role as 'CANDIDATE' | 'INTERVIEWER',
-      });
-    } catch (mailErr) {
-      console.error('[set-password] Failed to send OTP:', mailErr);
+    if (!otpResult.ok) {
+      createAuditLog({
+        userId: otpResult.userId ?? undefined,
+        action: 'PASSWORD_SETUP_OTP_FAILED',
+        status: 'FAILURE',
+        metadata: { email: normalizedEmail, reason: otpResult.reason },
+      })
+      return NextResponse.json({ error: otpResult.error }, { status: 400 })
+    }
+
+    const passwordHash = await bcrypt.hash(String(newPassword), 12)
+
+    const updatedUser = await prisma.$transaction(async (tx) => {
+      const target = otpResult.userId
+        ? await tx.user.findUnique({ where: { id: otpResult.userId } })
+        : await tx.user.findFirst({
+            where: {
+              OR: [
+                { email: normalizedEmail },
+                { username: normalizedEmail },
+                { candidate: { email: normalizedEmail } },
+              ],
+            },
+            orderBy: { id: 'asc' },
+          })
+
+      if (!target || target.passwordHash !== null) {
+        return null
+      }
+
+      // Atomic guard: only update if passwordHash is still null
+      const claim = await tx.user.updateMany({
+        where: { id: target.id, passwordHash: null },
+        data: {
+          passwordHash,
+          emailVerified: true,
+          tokenVersion: { increment: 1 },
+        },
+      })
+
+      if (claim.count !== 1) {
+        return null
+      }
+
+      await tx.otpVerification.updateMany({
+        where: { email: normalizedEmail, usedAt: null },
+        data: { usedAt: new Date() },
+      })
+
+      return target
+    })
+
+    if (!updatedUser) {
+      return NextResponse.json(
+        { error: 'Invalid setup request or password already configured.' },
+        { status: 400 }
+      )
     }
 
     const auditAction =
-      role === 'CANDIDATE' ? 'CANDIDATE_PASSWORD_SET' : 'INTERVIEWER_PASSWORD_SET';
+      updatedUser.role === 'CANDIDATE' ? 'CANDIDATE_PASSWORD_SET' : 'INTERVIEWER_PASSWORD_SET'
     createAuditLog({
-      userId: user.id,
-      username: user.username,
+      userId: updatedUser.id,
+      username: updatedUser.username,
       action: auditAction,
       status: 'SUCCESS',
-      metadata: { role, email: normalizedEmail },
-    });
+      metadata: { email: normalizedEmail, role: updatedUser.role },
+    })
 
     return NextResponse.json({
       success: true,
-      otpRequired: true,
-      email: normalizedEmail,
-      role: user.role,
-      message: 'Password set successfully. A verification code has been sent to your email.',
-    });
+      message: 'Your password has been configured. Please sign in with your new password.',
+    })
   } catch (err) {
-    console.error('set-password error:', err);
-    return NextResponse.json({ error: 'Internal server error.' }, { status: 500 });
+    console.error('set-password error:', err)
+    return NextResponse.json({ error: 'Internal server error.' }, { status: 500 })
   }
 }

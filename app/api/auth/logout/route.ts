@@ -1,8 +1,14 @@
 import { NextResponse } from 'next/server'
-import { getAppSession } from '@/lib/auth'
+import { getAppSession, clearSessionFields, getSessionOptions } from '@/lib/auth'
 import { createAuditLog } from '@/lib/audit-log'
+import { verifySameOrigin } from '@/lib/csrf'
 
 export async function POST(request: Request) {
+  const csrfError = verifySameOrigin(request)
+  if (csrfError) {
+    return csrfError
+  }
+
   const response = NextResponse.json({ success: true, redirect: '/login' })
   const session = await getAppSession(request, response)
 
@@ -15,23 +21,17 @@ export async function POST(request: Request) {
     })
   }
 
+  clearSessionFields(session)
   session.destroy()
-  return response
-}
 
-export async function GET(request: Request) {
-  const response = NextResponse.redirect(new URL('/login', request.url))
-  const session = await getAppSession(request, response)
+  const opts = getSessionOptions()
+  response.cookies.set(opts.cookieName, '', {
+    httpOnly: true,
+    sameSite: 'lax',
+    path: '/',
+    secure: process.env.NODE_ENV === 'production',
+    maxAge: 0,
+  })
 
-  if (session?.userId) {
-    createAuditLog({
-      userId: session.userId,
-      username: session.username,
-      action: 'AUTH_LOGOUT',
-      status: 'SUCCESS',
-    })
-  }
-
-  session.destroy()
   return response
 }

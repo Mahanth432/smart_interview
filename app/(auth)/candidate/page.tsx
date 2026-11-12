@@ -4,8 +4,9 @@ import React from 'react'
 import prisma from '@/lib/db'
 import Icon from '@/components/Icon'
 import Link from 'next/link'
-import { getAppSession } from '@/lib/auth'
+import { getValidatedAppSession } from '@/lib/auth-server'
 import { CandidateViewClient } from '@/components/candidate/CandidateViewClient'
+import { CandidateCompareClient } from '@/components/candidate/CandidateCompareClient'
 
 export default async function CandidateProfilePage({
   searchParams,
@@ -16,8 +17,8 @@ export default async function CandidateProfilePage({
   const activeTab = resolvedParams.tab || 'results'
   const searchQuery = resolvedParams.search || ''
 
-  const session = await getAppSession()
-  const userId = session.userId
+  const session = await getValidatedAppSession()
+  const userId = session.isLoggedIn ? session.userId : undefined
 
   if (!userId) {
     return (
@@ -97,18 +98,41 @@ export default async function CandidateProfilePage({
     )
   }
 
-  // INTERVIEWER / ADMIN Role View
+  // INTERVIEWER / ADMIN Role View (strictly isolated for interviewers)
+  const isAdmin = session.role === 'ADMIN'
+  const scopeWhere = isAdmin
+    ? {}
+    : {
+        OR: [
+          { sessions: { some: { interviewerId: userId } } },
+          { userId: { not: null }, sessions: { none: {} } },
+        ],
+      }
+  const searchWhere = searchQuery.trim()
+    ? {
+        OR: [
+          { name: { contains: searchQuery.trim(), mode: 'insensitive' as const } },
+          { email: { contains: searchQuery.trim(), mode: 'insensitive' as const } },
+        ],
+      }
+    : undefined
+
   const candidates = await prisma.candidate.findMany({
-    where: searchQuery.trim() ? {
-      OR: [
-        { name: { contains: searchQuery.trim(), mode: 'insensitive' } },
-        { email: { contains: searchQuery.trim(), mode: 'insensitive' } },
-      ],
-    } : undefined,
+    where:
+      !isAdmin && searchWhere
+        ? { AND: [scopeWhere, searchWhere] }
+        : !isAdmin
+          ? scopeWhere
+          : searchWhere,
     include: {
       user: { select: { username: true } },
-      _count: { select: { sessions: true } },
+      _count: {
+        select: {
+          sessions: isAdmin ? true : { where: { interviewerId: userId } },
+        },
+      },
       sessions: {
+        where: isAdmin ? undefined : { interviewerId: userId },
         orderBy: { startedAt: 'desc' },
         take: 1,
         select: {
@@ -139,13 +163,31 @@ export default async function CandidateProfilePage({
           <p className="zentra-page-subtitle">Select a candidate profile to configure and launch a live interview session.</p>
         </div>
 
-        <div className="zentra-header-actions">
+        <div className="zentra-header-actions" style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap', alignItems: 'center' }}>
+          <form method="GET" action="/candidate" style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
+            <input
+              type="text"
+              name="search"
+              defaultValue={searchQuery}
+              placeholder="Search name or email..."
+              className="zentra-input"
+              style={{ minWidth: '210px' }}
+            />
+            <button type="submit" className="zentra-btn zentra-btn-secondary">
+              <Icon name="search" size={16} />
+              <span>Filter</span>
+            </button>
+          </form>
           <Link href="/interview" className="zentra-btn zentra-btn-primary">
             <Icon name="play_arrow" size={16} />
             <span>Launch Live Interview</span>
           </Link>
         </div>
       </div>
+
+      <CandidateCompareClient
+        candidates={candidates.map((c) => ({ id: c.id, name: c.name, email: c.email }))}
+      />
 
       {/* Candidates Grid Card */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '1.25rem' }}>
@@ -202,14 +244,23 @@ export default async function CandidateProfilePage({
                   </div>
                 </div>
 
-                <div style={{ borderTop: '1px solid var(--zentra-border-subtle)', paddingTop: '1rem' }}>
+                <div style={{ borderTop: '1px solid var(--zentra-border-subtle)', paddingTop: '1rem', display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                   <Link
                     href={`/interview?candidateId=${cand.id}&candidateName=${encodeURIComponent(cand.name)}`}
                     className="zentra-btn zentra-btn-primary"
-                    style={{ width: '100%', justifyContent: 'center' }}
+                    style={{ flex: 1, justifyContent: 'center' }}
                   >
                     <Icon name="play_arrow" size={16} />
-                    <span>Create &amp; Start Interview</span>
+                    <span>Start Interview</span>
+                  </Link>
+                  <Link
+                    href={`/interview?candidateId=${cand.id}&candidateName=${encodeURIComponent(cand.name)}&mode=revision`}
+                    className="zentra-btn zentra-btn-secondary"
+                    style={{ justifyContent: 'center' }}
+                    title="Launch targeted revision session based on recurring weaknesses"
+                  >
+                    <Icon name="trending_up" size={15} />
+                    <span>Revision</span>
                   </Link>
                 </div>
               </div>

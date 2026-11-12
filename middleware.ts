@@ -63,6 +63,7 @@ export async function middleware(request: NextRequest) {
     // E. INTERVIEWER & ADMIN only API routes (Candidates forbidden)
     const isInterviewerOrAdminApi =
       pathname === '/api/interview/start' ||
+      pathname.startsWith('/api/interviewer') ||
       pathname.startsWith('/api/knowledge-base') ||
       pathname.startsWith('/api/documents') ||
       pathname.startsWith('/api/rag')

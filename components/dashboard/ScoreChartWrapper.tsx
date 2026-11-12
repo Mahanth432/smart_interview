@@ -2,8 +2,8 @@
 
 import React from 'react'
 import dynamic from 'next/dynamic'
+import type { ScoreChartPoint } from '@/components/ScoreChart'
 
-// Dynamically import ScoreChart with SSR disabled and smooth skeleton
 const ScoreChart = dynamic(
   () => import('@/components/ScoreChart').then((mod) => mod.ScoreChart),
   {
@@ -28,6 +28,6 @@ const ScoreChart = dynamic(
   }
 )
 
-export const ScoreChartWrapper = () => {
-  return <ScoreChart />
+export const ScoreChartWrapper = ({ data = [] }: { data?: ScoreChartPoint[] }) => {
+  return <ScoreChart data={data} />
 }

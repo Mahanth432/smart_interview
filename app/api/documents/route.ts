@@ -27,9 +27,10 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
 
-    // Reconcile user storage against Backblaze B2 on initial load / manual refresh (skip on fast status polling)
+    // Only run slow synchronous B2 reconciliation when explicitly requested (?reconcile=1);
+    // normal list fetches & status polls read Neon directly.
     const reqUrl = new URL(request.url)
-    const shouldReconcile = reqUrl.searchParams.get('reconcile') !== '0'
+    const shouldReconcile = reqUrl.searchParams.get('reconcile') === '1'
     let syncStatus: StorageSyncSummary | null = null
 
     if (shouldReconcile) {

@@ -1,64 +1,59 @@
-import { NextRequest, NextResponse } from 'next/server';
-import prisma from '@/lib/db';
-import { generateSecureOtp, hashOtp, OTP_COOLDOWN_SECONDS } from '@/lib/otp';
-import { sendOtpEmail } from '@/lib/mail';
-import { createAuditLog } from '@/lib/audit-log';
+import { NextRequest, NextResponse } from 'next/server'
+import prisma from '@/lib/db'
+import { sendOtpEmail } from '@/lib/mail'
+import { createAuditLog } from '@/lib/audit-log'
+import { checkEmailOtpQuota, issueOtpForEmail, type OtpPurpose } from '@/lib/otp-store'
+import { checkRateLimit, extractClientIp, rateLimitResponse } from '@/lib/rate-limit'
+
+function resolvePurpose(raw: unknown): OtpPurpose {
+  if (raw === 'PASSWORD_RESET') return 'PASSWORD_RESET'
+  if (raw === 'PASSWORD_SETUP') return 'PASSWORD_SETUP'
+  return 'EMAIL_VERIFICATION'
+}
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { email, role, purpose = 'EMAIL_VERIFICATION' } = body;
+    const clientIp = extractClientIp(req)
+    const ipLimit = await checkRateLimit({
+      key: `request-otp:ip:${clientIp}`,
+      limit: 15,
+      windowSeconds: 15 * 60,
+    })
+    if (!ipLimit.allowed) {
+      return rateLimitResponse(
+        ipLimit.retryAfterSeconds,
+        'Too many verification code requests. Please wait before trying again.'
+      )
+    }
+
+    const body = await req.json()
+    const { email, role, purpose } = body
 
     if (!email) {
-      return NextResponse.json({ error: 'Email is required.' }, { status: 400 });
+      return NextResponse.json({ error: 'Email is required.' }, { status: 400 })
     }
 
-    const normalizedEmail = email.trim().toLowerCase();
-
+    const normalizedEmail = String(email).trim().toLowerCase()
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
-      return NextResponse.json({ error: 'Please enter a valid email address.' }, { status: 400 });
+      return NextResponse.json({ error: 'Please enter a valid email address.' }, { status: 400 })
     }
 
-    const otpPurpose = purpose === 'PASSWORD_RESET' ? 'PASSWORD_RESET' : 'EMAIL_VERIFICATION';
+    const otpPurpose = resolvePurpose(purpose)
 
-    // Rate Limiting: Check cooldown (60 seconds) for this email and purpose
-    const recentOtp = await prisma.otpVerification.findFirst({
-      where: {
-        email: normalizedEmail,
-        purpose: otpPurpose,
-        createdAt: { gt: new Date(Date.now() - OTP_COOLDOWN_SECONDS * 1000) },
-      },
-      orderBy: { createdAt: 'desc' },
-    });
-
-    if (recentOtp) {
-      const remainingSeconds = Math.ceil(
-        (recentOtp.createdAt.getTime() + OTP_COOLDOWN_SECONDS * 1000 - Date.now()) / 1000
-      );
-      return NextResponse.json(
-        { error: `Please wait ${Math.max(remainingSeconds, 1)} seconds before requesting another code.` },
-        { status: 429 }
-      );
+    const quota = await checkEmailOtpQuota(normalizedEmail, otpPurpose)
+    if (!quota.allowed) {
+      if (quota.reason === 'cooldown') {
+        return rateLimitResponse(
+          quota.retryAfterSeconds || 60,
+          `Please wait ${quota.retryAfterSeconds || 60} seconds before requesting another code.`
+        )
+      }
+      return rateLimitResponse(
+        quota.retryAfterSeconds || 3600,
+        'Too many requests for this email. Please try again in an hour.'
+      )
     }
 
-    // Rate Limiting: Max 5 requests per hour per email
-    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
-    const hourlyCount = await prisma.otpVerification.count({
-      where: {
-        email: normalizedEmail,
-        purpose: otpPurpose,
-        createdAt: { gt: oneHourAgo },
-      },
-    });
-
-    if (hourlyCount >= 5) {
-      return NextResponse.json(
-        { error: 'Too many requests for this email. Please try again in an hour.' },
-        { status: 429 }
-      );
-    }
-
-    // Lookup user by email or username, or candidate profile
     const user = await prisma.user.findFirst({
       where: {
         OR: [
@@ -67,50 +62,35 @@ export async function POST(req: NextRequest) {
           { candidate: { email: normalizedEmail } },
         ],
       },
+      orderBy: { id: 'asc' },
       include: { candidate: true },
-    });
+    })
 
-    // If PASSWORD_RESET flow:
+    const genericSuccess = {
+      success: true,
+      message: 'If an eligible account exists with this email, a verification code has been sent.',
+    }
+
     if (otpPurpose === 'PASSWORD_RESET') {
-      // Generic success response regardless of user existence to prevent account enumeration
       if (!user) {
-        if (process.env.NODE_ENV !== 'production') {
-          console.log(`[password-reset] No user matched email: "${normalizedEmail}"`);
-        }
-        return NextResponse.json({
-          success: true,
-          message: 'If an account exists with this email, a verification code has been sent.',
-        });
+        return NextResponse.json(genericSuccess)
       }
 
-      // Invalidate any previous unused PASSWORD_RESET OTPs for this email
-      await prisma.otpVerification.updateMany({
-        where: { email: normalizedEmail, usedAt: null, purpose: 'PASSWORD_RESET' },
-        data: { usedAt: new Date() },
-      });
+      const { otp } = await issueOtpForEmail({
+        userId: user.id,
+        email: normalizedEmail,
+        purpose: 'PASSWORD_RESET',
+      })
 
-      // Generate, hash, and store OTP
-      const otp = generateSecureOtp();
-      const otpHash = hashOtp(otp);
-      const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-
-      await prisma.otpVerification.create({
-        data: {
-          userId: user.id,
-          email: normalizedEmail,
-          otpHash,
-          purpose: 'PASSWORD_RESET',
-          expiresAt,
-          attempts: 0,
-        },
-      });
-
-      await sendOtpEmail({
+      const sent = await sendOtpEmail({
         email: normalizedEmail,
         otp,
         role: user.role,
         purpose: 'PASSWORD_RESET',
-      });
+      })
+      if (!sent && process.env.NODE_ENV === 'production') {
+        return NextResponse.json({ error: 'Email delivery service unavailable.' }, { status: 500 })
+      }
 
       createAuditLog({
         userId: user.id,
@@ -118,59 +98,63 @@ export async function POST(req: NextRequest) {
         action: 'PASSWORD_RESET_OTP_REQUESTED',
         status: 'SUCCESS',
         metadata: { email: normalizedEmail },
-      });
+      })
 
-      return NextResponse.json({
-        success: true,
-        message: 'If an account exists with this email, a verification code has been sent.',
-      });
+      return NextResponse.json(genericSuccess)
     }
 
-    // EMAIL_VERIFICATION flow (for registration verification resends)
-    if (role === 'ADMIN') {
-      return NextResponse.json(
-        { error: 'Admin accounts do not require email verification.' },
-        { status: 403 }
-      );
-    }
-
-    if (!user || (role && user.role !== role)) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.log(`[request-otp] No matching user for verification email: "${normalizedEmail}"`);
+    if (otpPurpose === 'PASSWORD_SETUP') {
+      if (!user || user.passwordHash !== null) {
+        return NextResponse.json(genericSuccess)
       }
-      return NextResponse.json({
-        success: true,
-        message: 'If an account is associated with this email, a verification code has been sent.',
-      });
-    }
 
-    // Invalidate previous unused EMAIL_VERIFICATION OTPs
-    await prisma.otpVerification.updateMany({
-      where: { email: normalizedEmail, usedAt: null, purpose: 'EMAIL_VERIFICATION' },
-      data: { usedAt: new Date() },
-    });
-
-    const otp = generateSecureOtp();
-    const otpHash = hashOtp(otp);
-    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
-
-    await prisma.otpVerification.create({
-      data: {
+      const { otp } = await issueOtpForEmail({
         userId: user.id,
         email: normalizedEmail,
-        otpHash,
-        purpose: 'EMAIL_VERIFICATION',
-        expiresAt,
-        attempts: 0,
-      },
-    });
+        purpose: 'PASSWORD_SETUP',
+      })
 
-    await sendOtpEmail({
+      const sent = await sendOtpEmail({
+        email: normalizedEmail,
+        otp,
+        role: user.role,
+        purpose: 'EMAIL_VERIFICATION',
+      })
+      if (!sent && process.env.NODE_ENV === 'production') {
+        return NextResponse.json({ error: 'Email delivery service unavailable.' }, { status: 500 })
+      }
+
+      createAuditLog({
+        userId: user.id,
+        username: user.username,
+        action: 'PASSWORD_SETUP_OTP_REQUESTED',
+        status: 'SUCCESS',
+        metadata: { email: normalizedEmail },
+      })
+
+      return NextResponse.json(genericSuccess)
+    }
+
+    // EMAIL_VERIFICATION flow: never leak admin existence/role differences
+    if (!user || user.role === 'ADMIN' || (role && user.role !== role)) {
+      return NextResponse.json(genericSuccess)
+    }
+
+    const { otp } = await issueOtpForEmail({
+      userId: user.id,
+      email: normalizedEmail,
+      purpose: 'EMAIL_VERIFICATION',
+    })
+
+    const sent = await sendOtpEmail({
       email: normalizedEmail,
       otp,
       role: user.role,
       purpose: 'EMAIL_VERIFICATION',
-    });
+    })
+    if (!sent && process.env.NODE_ENV === 'production') {
+      return NextResponse.json({ error: 'Failed to send verification email.' }, { status: 500 })
+    }
 
     createAuditLog({
       userId: user.id,
@@ -178,14 +162,11 @@ export async function POST(req: NextRequest) {
       action: 'EMAIL_VERIFICATION_OTP_REQUESTED',
       status: 'SUCCESS',
       metadata: { email: normalizedEmail, role: user.role },
-    });
+    })
 
-    return NextResponse.json({
-      success: true,
-      message: 'Verification code sent to your email.',
-    });
+    return NextResponse.json(genericSuccess)
   } catch (err) {
-    console.error('request-otp error:', err);
-    return NextResponse.json({ error: 'Failed to process OTP request.' }, { status: 500 });
+    console.error('request-otp error:', err)
+    return NextResponse.json({ error: 'Failed to process OTP request.' }, { status: 500 })
   }
 }

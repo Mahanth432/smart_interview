@@ -23,11 +23,10 @@ const ALLOWED_MIME_TYPES = new Set([
   'application/pdf',
   'text/plain',
   'text/markdown',
-  'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
 ])
 
-const ALLOWED_EXTENSIONS = new Set(['.pdf', '.txt', '.md', '.doc', '.docx'])
+const ALLOWED_EXTENSIONS = new Set(['.pdf', '.txt', '.md', '.docx'])
 
 async function fallbackMarkDocumentFailed(
   docId: number,

@@ -55,10 +55,10 @@ export const KnowledgeBaseClient = () => {
   } | null>(null)
   const uploadAbortRef = useRef<AbortController | null>(null)
 
-  const fetchDocs = useCallback(async (reconcile = true) => {
+  const fetchDocs = useCallback(async (reconcile = false) => {
     setLoading(true)
     try {
-      const url = reconcile ? '/api/documents' : '/api/documents?reconcile=0'
+      const url = reconcile ? '/api/documents?reconcile=1' : '/api/documents'
       const res = await fetch(url, { cache: 'no-store', credentials: 'include' })
       const data = await res.json()
       if (res.ok) {
@@ -96,9 +96,25 @@ export const KnowledgeBaseClient = () => {
   useEffect(() => {
     if (fetchedRef.current) return
     fetchedRef.current = true
-    fetchDocs()
+    fetchDocs(false)
     fetchAdminKBStatus()
   }, [fetchDocs, fetchAdminKBStatus])
+
+  // Poll automatically while any document is still UPLOADED or PROCESSING
+  const hasPendingDocs = docs.some((d) => d.status === 'UPLOADED' || d.status === 'PROCESSING')
+  useEffect(() => {
+    if (!hasPendingDocs) return
+    let polls = 0
+    const interval = setInterval(() => {
+      polls++
+      if (polls > 24) {
+        clearInterval(interval)
+        return
+      }
+      fetchDocs(false)
+    }, 2500)
+    return () => clearInterval(interval)
+  }, [hasPendingDocs, fetchDocs])
 
   const handleFetchKB = async () => {
     if (!confirm('This will sync the latest Admin Knowledge Base documents to your account. Your private documents will NOT be affected. Continue?')) return
@@ -269,8 +285,6 @@ export const KnowledgeBaseClient = () => {
 
     if (successCount > 0) {
       fetchDocs(false)
-      setTimeout(() => fetchDocs(false), 2000)
-      setTimeout(() => fetchDocs(false), 5000)
     }
   }
 
@@ -399,7 +413,7 @@ export const KnowledgeBaseClient = () => {
             <input
               type="file"
               multiple
-              accept=".pdf,.txt,.md,.doc,.docx"
+              accept=".pdf,.txt,.md,.docx"
               style={{ display: 'none' }}
               onChange={handleFileChange}
               disabled={loading || uploading}

@@ -1,6 +1,7 @@
 import { generateGeminiResponse } from './gemini'
 import { generateGroqResponse } from './groq'
 import { NextResponse } from 'next/server'
+import { Prisma } from '@prisma/client'
 import Groq from 'groq-sdk'
 import { GoogleGenerativeAIError } from '@google/generative-ai'
 import {
@@ -248,11 +249,57 @@ export async function generateLLMResponse(
 }
 
 /**
- * Standard error handler for LLM API routes.
- * Ensures NO technical details, provider names, or API errors are exposed to candidates or interviewers.
+ * Standard error handler for AI/interview API routes.
+ * Distinguishes database / malformed-request errors from actual LLM provider outages,
+ * while ensuring NO internal keys, URLs, or stack traces leak to clients.
  */
 export function handleLLMError(err: unknown) {
-  console.error('[LLM API Error handler caught]:', err)
+  console.error('[API Error handler caught]:', err)
+
+  if (err instanceof SyntaxError) {
+    return NextResponse.json(
+      { success: false, error: 'Invalid JSON request payload.' },
+      { status: 400 }
+    )
+  }
+
+  if (err instanceof Prisma.PrismaClientKnownRequestError) {
+    if (err.code === 'P2002') {
+      return NextResponse.json(
+        { success: false, error: 'A duplicate record already exists.' },
+        { status: 409 }
+      )
+    }
+    if (err.code === 'P2025') {
+      return NextResponse.json(
+        { success: false, error: 'Requested record was not found.' },
+        { status: 404 }
+      )
+    }
+    return NextResponse.json(
+      { success: false, error: 'A database error occurred while processing this request.' },
+      { status: 500 }
+    )
+  }
+
+  if (
+    err instanceof Prisma.PrismaClientInitializationError ||
+    err instanceof Prisma.PrismaClientRustPanicError ||
+    err instanceof Prisma.PrismaClientUnknownRequestError
+  ) {
+    return NextResponse.json(
+      { success: false, error: 'Database service is temporarily unavailable.' },
+      { status: 503 }
+    )
+  }
+
+  if (err instanceof Prisma.PrismaClientValidationError) {
+    return NextResponse.json(
+      { success: false, error: 'Invalid database operation parameters.' },
+      { status: 400 }
+    )
+  }
+
   return NextResponse.json(
     {
       success: false,

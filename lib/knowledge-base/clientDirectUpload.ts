@@ -1,6 +1,6 @@
 export const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024
 
-const ALLOWED_EXTENSIONS = new Set(['.pdf', '.txt', '.md', '.doc', '.docx'])
+const ALLOWED_EXTENSIONS = new Set(['.pdf', '.txt', '.md', '.docx'])
 
 export type DirectUploadStage =
   | 'initializing'
@@ -53,7 +53,7 @@ export function validateClientDocumentFile(file: File): string | null {
   const dotIdx = file.name.lastIndexOf('.')
   const ext = dotIdx >= 0 ? file.name.slice(dotIdx).toLowerCase() : ''
   if (!ALLOWED_EXTENSIONS.has(ext)) {
-    return 'Unsupported file type. Allowed formats: PDF, DOCX, DOC, TXT, MD.'
+    return 'Unsupported file type. Allowed formats: PDF, DOCX, TXT, MD. Legacy binary .doc files are not supported.'
   }
   return null
 }

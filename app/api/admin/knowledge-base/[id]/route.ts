@@ -74,8 +74,15 @@ export async function DELETE(
       return NextResponse.json({ error: 'Not an admin master document' }, { status: 400 })
     }
 
-    // Delete admin document first, then delete B2 object only if no other Document references the key
-    await prisma.document.delete({ where: { id } })
+    // Delete all synced interviewer copies + admin master document atomically,
+    // then delete B2 object only if no other Document references the key
+    const deletedSynced = await prisma.$transaction(async (tx) => {
+      const syncedResult = await tx.document.deleteMany({
+        where: { docSource: 'SYNCED_FROM_ADMIN', adminDocId: id },
+      })
+      await tx.document.delete({ where: { id } })
+      return syncedResult.count
+    })
 
     if (doc.storagePath) {
       const remainingRefs = await prisma.document.count({ where: { storagePath: doc.storagePath } })
@@ -91,10 +98,10 @@ export async function DELETE(
       action: 'ADMIN_KB_DOCUMENT_DELETED',
       entityType: 'Document',
       entityId: id.toString(),
-      metadata: { name: doc.name }
+      metadata: { name: doc.name, deletedSyncedCopies: deletedSynced },
     })
 
-    return NextResponse.json({ success: true })
+    return NextResponse.json({ success: true, deletedSyncedCopies: deletedSynced })
   } catch (err) {
     console.error('Admin KB delete error:', err)
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 })

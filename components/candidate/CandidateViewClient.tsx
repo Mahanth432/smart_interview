@@ -40,6 +40,47 @@ interface CandidateViewClientProps {
   sessions: CandidateSession[]
 }
 
+interface CandidateMemorySnapshot {
+  profile?: {
+    answeringStyle?: string
+    reasoningPattern?: string
+    technicalStrengths?: string[]
+    communicationTraits?: string[]
+    learningPreferences?: string[]
+    totalEvaluations?: number
+    averageScore?: number | null
+  } | null
+  recurringWeaknesses?: Array<{
+    id: string
+    conceptName: string
+    subject: string
+    masteryScore: number
+    weaknessCount: number
+    forgettingRisk: number
+  }>
+  forgettingPredictions?: Array<{
+    id: string
+    conceptName: string
+    subject: string
+    masteryScore: number
+    forgettingRisk: number
+    daysSinceTested: number
+    stabilityDays: number
+    riskLabel: 'low' | 'moderate' | 'high'
+  }>
+  revisions?: Array<{
+    id: string
+    conceptName: string
+    subject: string
+    priorityScore: number
+    forgettingRisk: number
+    reason: string
+    linkedDocumentName?: string | null
+    status: string
+  }>
+  topicProgression?: Record<string, Array<{ date: string; score: number }>>
+}
+
 export function CandidateViewClient({
   initialTab = 'results',
   totalInterviews,
@@ -51,27 +92,83 @@ export function CandidateViewClient({
   const router = useRouter()
   const searchParams = useSearchParams()
 
-  // Track active tab from searchParams, falling back to initialTab
   const currentUrlTab = searchParams.get('tab')
-  const [activeTab, setActiveTab] = useState<'results' | 'performance'>(() => {
-    return (currentUrlTab === 'performance' || initialTab === 'performance') ? 'performance' : 'results'
+  const [activeTab, setActiveTab] = useState<'results' | 'performance' | 'learning'>(() => {
+    if (currentUrlTab === 'performance' || initialTab === 'performance') return 'performance'
+    if (currentUrlTab === 'learning' || initialTab === 'learning') return 'learning'
+    return 'results'
   })
+  const [memory, setMemory] = useState<CandidateMemorySnapshot | null>(null)
+  const [loadingMemory, setLoadingMemory] = useState(false)
 
-  // Sync state whenever URL searchParams change (browser back/forward, direct nav)
   useEffect(() => {
     const tabFromUrl = searchParams.get('tab')
     if (tabFromUrl === 'performance') {
       setActiveTab('performance')
+    } else if (tabFromUrl === 'learning') {
+      setActiveTab('learning')
     } else {
       setActiveTab('results')
     }
   }, [searchParams])
 
-  const handleTabClick = (tab: 'results' | 'performance', e: React.MouseEvent) => {
+  const loadMemory = React.useCallback(async () => {
+    setLoadingMemory(true)
+    try {
+      const res = await fetch('/api/candidate/memory', { cache: 'no-store' })
+      if (res.ok) {
+        const data = await res.json()
+        setMemory(data)
+      }
+    } catch {
+      // ignore non-fatal
+    } finally {
+      setLoadingMemory(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (activeTab === 'learning' && !memory) {
+      loadMemory()
+    }
+  }, [activeTab, memory, loadMemory])
+
+  const handleRevisionAction = async (revisionId: string, status: 'completed' | 'dismissed') => {
+    try {
+      const res = await fetch('/api/candidate/memory', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ revisionId, status }),
+      })
+      if (res.ok) {
+        loadMemory()
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  const handleRefreshRevisions = async () => {
+    setLoadingMemory(true)
+    try {
+      await fetch('/api/candidate/memory', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'refresh' }),
+      })
+      await loadMemory()
+    } finally {
+      setLoadingMemory(false)
+    }
+  }
+
+  const handleTabClick = (tab: 'results' | 'performance' | 'learning', e: React.MouseEvent) => {
     e.preventDefault()
     setActiveTab(tab)
     if (tab === 'performance') {
       router.push('/candidate?tab=performance', { scroll: false })
+    } else if (tab === 'learning') {
+      router.push('/candidate?tab=learning', { scroll: false })
     } else {
       router.push('/candidate', { scroll: false })
     }
@@ -152,6 +249,26 @@ export function CandidateViewClient({
           >
             Performance
           </a>
+          <a
+            href="/candidate?tab=learning"
+            role="tab"
+            aria-selected={activeTab === 'learning'}
+            onClick={(e) => handleTabClick('learning', e)}
+            style={{
+              padding: '0.45rem 1.15rem',
+              borderRadius: '9999px',
+              fontSize: '0.825rem',
+              fontWeight: 600,
+              textDecoration: 'none',
+              cursor: 'pointer',
+              transition: 'all 0.2s ease',
+              background: activeTab === 'learning' ? 'var(--zentra-pill-active-bg)' : 'transparent',
+              color: activeTab === 'learning' ? 'var(--zentra-pill-active-text)' : 'var(--zentra-pill-inactive-text)',
+              boxShadow: activeTab === 'learning' ? '0 2px 8px rgba(0,0,0,0.08)' : 'none',
+            }}
+          >
+            Learning &amp; Revisions
+          </a>
         </div>
       </div>
 
@@ -207,7 +324,150 @@ export function CandidateViewClient({
         </div>
       </div>
 
-      {activeTab === 'performance' ? (
+      {activeTab === 'learning' ? (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+          <div className="zentra-card">
+            <div className="zentra-card-header" style={{ flexWrap: 'wrap', gap: '0.75rem' }}>
+              <div>
+                <h2 className="zentra-card-title">Cognitive &amp; Answering Style Profile</h2>
+                <span style={{ fontSize: '0.8rem', color: 'var(--zentra-text-muted)' }}>
+                  Synthesized across all completed evaluations
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={handleRefreshRevisions}
+                disabled={loadingMemory}
+                className="zentra-btn zentra-btn-secondary"
+              >
+                <Icon name="refresh" size={16} />
+                <span>{loadingMemory ? 'Analyzing...' : 'Refresh Recommendations'}</span>
+              </button>
+            </div>
+
+            {!memory?.profile ? (
+              <p style={{ margin: 0, color: 'var(--zentra-text-muted)', fontSize: '0.875rem' }}>
+                {loadingMemory
+                  ? 'Loading candidate learning memory...'
+                  : 'Complete interview questions to build your personalized reasoning and answering profile.'}
+              </p>
+            ) : (
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1rem' }}>
+                <div style={{ background: 'var(--zentra-bg-muted)', padding: '1rem', borderRadius: '12px', border: '1px solid var(--zentra-border)' }}>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--zentra-text-muted)' }}>Answering Style</div>
+                  <div style={{ marginTop: '0.35rem', fontWeight: 600, color: 'var(--zentra-text-primary)' }}>
+                    {memory.profile.answeringStyle || 'Balanced responder'}
+                  </div>
+                </div>
+                <div style={{ background: 'var(--zentra-bg-muted)', padding: '1rem', borderRadius: '12px', border: '1px solid var(--zentra-border)' }}>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--zentra-text-muted)' }}>Reasoning Pattern</div>
+                  <div style={{ marginTop: '0.35rem', fontSize: '0.85rem', color: 'var(--zentra-text-primary)' }}>
+                    {memory.profile.reasoningPattern || 'Consistent analytical explanations'}
+                  </div>
+                </div>
+                <div style={{ background: 'var(--zentra-bg-muted)', padding: '1rem', borderRadius: '12px', border: '1px solid var(--zentra-border)' }}>
+                  <div style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--zentra-text-muted)' }}>Technical Strengths</div>
+                  <div style={{ marginTop: '0.45rem', display: 'flex', flexWrap: 'wrap', gap: '0.35rem' }}>
+                    {(memory.profile.technicalStrengths || []).length > 0
+                      ? memory.profile.technicalStrengths!.slice(0, 6).map((s, idx) => (
+                          <span key={idx} className="zentra-badge success">{s}</span>
+                        ))
+                      : <span style={{ fontSize: '0.8rem', color: 'var(--zentra-text-muted)' }}>Evaluating...</span>}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))', gap: '1.25rem' }}>
+            {/* Recurring Weaknesses */}
+            <div className="zentra-card">
+              <h3 className="zentra-card-title" style={{ marginBottom: '0.75rem' }}>Recurring Weaknesses</h3>
+              {(memory?.recurringWeaknesses || []).length === 0 ? (
+                <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--zentra-text-muted)' }}>No recurring concept gaps detected yet.</p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+                  {memory!.recurringWeaknesses!.slice(0, 6).map((w) => (
+                    <div key={w.id} style={{ background: 'var(--zentra-bg-muted)', padding: '0.75rem', borderRadius: '10px', border: '1px solid var(--zentra-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--zentra-text-primary)' }}>{w.conceptName}</div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--zentra-text-muted)' }}>{w.subject} &bull; Flagged {w.weaknessCount}x</div>
+                      </div>
+                      <span className="zentra-badge danger">{Math.round(w.masteryScore)}% mastery</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* Forgetting Risk Predictions */}
+            <div className="zentra-card">
+              <h3 className="zentra-card-title" style={{ marginBottom: '0.75rem' }}>Forgetting-Risk Predictions</h3>
+              {(memory?.forgettingPredictions || []).length === 0 ? (
+                <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--zentra-text-muted)' }}>All tested concepts currently have strong retention stability.</p>
+              ) : (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.65rem' }}>
+                  {memory!.forgettingPredictions!.slice(0, 6).map((fp) => (
+                    <div key={fp.id} style={{ background: 'var(--zentra-bg-muted)', padding: '0.75rem', borderRadius: '10px', border: '1px solid var(--zentra-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.5rem' }}>
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: '0.875rem', color: 'var(--zentra-text-primary)' }}>{fp.conceptName}</div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--zentra-text-muted)' }}>{fp.daysSinceTested}d since tested &bull; Stability {fp.stabilityDays}d</div>
+                      </div>
+                      <span className={`zentra-badge ${fp.riskLabel === 'high' ? 'danger' : 'warning'}`}>
+                        {Math.round(fp.forgettingRisk * 100)}% risk
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Personalized Revision Recommendations */}
+          <div className="zentra-card">
+            <h3 className="zentra-card-title" style={{ marginBottom: '0.75rem' }}>Recommended Revision Queue</h3>
+            {(memory?.revisions || []).length === 0 ? (
+              <p style={{ margin: 0, fontSize: '0.85rem', color: 'var(--zentra-text-muted)' }}>No pending revision sessions queued.</p>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                {memory!.revisions!.map((rec) => (
+                  <div key={rec.id} style={{ background: 'var(--zentra-bg-muted)', padding: '0.9rem 1rem', borderRadius: '12px', border: '1px solid var(--zentra-border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
+                    <div>
+                      <div style={{ fontWeight: 600, color: 'var(--zentra-text-primary)' }}>
+                        {rec.conceptName} <span className="zentra-badge info" style={{ marginLeft: '0.4rem' }}>{rec.subject}</span>
+                      </div>
+                      <div style={{ fontSize: '0.78rem', color: 'var(--zentra-text-muted)', marginTop: '0.2rem' }}>{rec.reason}</div>
+                      {rec.linkedDocumentName && (
+                        <div style={{ fontSize: '0.75rem', color: '#2563eb', marginTop: '0.2rem' }}>
+                          Study Material: {rec.linkedDocumentName}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.5rem' }}>
+                      <button
+                        type="button"
+                        onClick={() => handleRevisionAction(rec.id, 'completed')}
+                        className="zentra-btn zentra-btn-primary"
+                        style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }}
+                      >
+                        Mark Reviewed
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => handleRevisionAction(rec.id, 'dismissed')}
+                        className="zentra-btn zentra-btn-secondary"
+                        style={{ padding: '0.35rem 0.75rem', fontSize: '0.75rem' }}
+                      >
+                        Dismiss
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      ) : activeTab === 'performance' ? (
         /* Performance Tab View */
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
           {/* Performance Summary Cards */}
@@ -285,7 +545,15 @@ export function CandidateViewClient({
               <span className="zentra-dot-menu">&bull;&bull;&bull;</span>
             </div>
             <div style={{ minHeight: '260px', width: '100%' }}>
-              <ScoreChartWrapper />
+              <ScoreChartWrapper
+                data={[...sessions]
+                  .filter((s) => typeof (s.score ?? s.report?.overallScore) === 'number')
+                  .reverse()
+                  .map((s, idx) => ({
+                    label: `${new Date(s.startedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} (#${idx + 1})`,
+                    score: Number(s.score ?? s.report?.overallScore ?? 0),
+                  }))}
+              />
             </div>
           </div>
 

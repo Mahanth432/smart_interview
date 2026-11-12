@@ -37,11 +37,11 @@ interface AdminChartsProps {
 
 export function AdminDashboardCharts({ statusBreakdown, activityLabels, activityData }: AdminChartsProps) {
   const lineData = {
-    labels: activityLabels.length > 0 ? activityLabels : ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
+    labels: activityLabels.length > 0 ? activityLabels : ['6d ago', '5d ago', '4d ago', '3d ago', '2d ago', 'Yesterday', 'Today'],
     datasets: [
       {
         label: 'Sessions',
-        data: activityData.length > 0 ? activityData : [4, 6, 8, 5, 9, 7, 10],
+        data: activityData.length > 0 ? activityData : [0, 0, 0, 0, 0, 0, 0],
         borderColor: '#2563eb',
         backgroundColor: (context: { chart: { ctx: CanvasRenderingContext2D } }) => {
           const ctx = context.chart.ctx

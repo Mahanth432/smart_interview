@@ -38,7 +38,8 @@ export async function sendOtpEmail({ email, otp, role, purpose = 'EMAIL_VERIFICA
       console.log(`(Add SMTP_USER and SMTP_PASS to .env to send live emails)`);
       console.log(`=============================================================\n`);
     } else {
-      console.warn(`[SmartInterview Email] SMTP credentials not configured in production environment.`);
+      console.error(`[SmartInterview Email] SMTP credentials not configured in production environment.`);
+      return false;
     }
     return true;
   }

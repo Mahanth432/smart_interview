@@ -3,6 +3,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Icon from '@/components/Icon';
+import { useToast } from '@/components/providers/ToastProvider';
+import { normalizeDifficulty } from '@/lib/interview/difficulty';
 import {
   MAX_TRANSCRIBE_AUDIO_BYTES,
   resolveRecordingFilename,
@@ -20,6 +22,17 @@ interface SessionData {
   candidateName?: string;
 }
 
+interface SourceReference {
+  chunkId: number;
+  documentId: number;
+  documentName: string;
+  originalFilename: string;
+  chunkIndex: number;
+  similarity: number;
+  pageNumber?: number | null;
+  topic?: string | null;
+}
+
 interface QuestionData {
   id: string;
   content: string;
@@ -27,6 +40,7 @@ interface QuestionData {
   topic?: string;
   difficulty?: string;
   expectedAnswer?: string;
+  sourceReferences?: SourceReference[] | null;
 }
 
 interface EvaluationFeedback {
@@ -55,11 +69,16 @@ interface SuggestionData {
 
 interface DocumentData {
   id: number;
+  name?: string;
   originalFilename: string;
+  status?: string;
+  storageStatus?: string;
+  chunkCount?: number;
 }
 
 export default function InterviewPage() {
   const router = useRouter();
+  const { showToast } = useToast();
 
   const [userRole, setUserRole] = useState<string | null>(null);
   const [isResuming, setIsResuming] = useState(true);
@@ -69,9 +88,16 @@ export default function InterviewPage() {
   const [candidateList, setCandidateList] = useState<CandidateOption[]>([]);
   const [selectedCandidateId, setSelectedCandidateId] = useState<string>('');
   const [candidateNameInput, setCandidateNameInput] = useState<string>('');
-  const [difficulty, setDifficulty] = useState('intermediate');
+  const [subject, setSubject] = useState<string>('Data Structures & Algorithms');
+  const [additionalSubjects, setAdditionalSubjects] = useState<string>('');
+  const [candidateMemoryHint, setCandidateMemoryHint] = useState<{
+    answeringStyle?: string;
+    recurringWeaknesses?: Array<{ conceptName: string; masteryScore: number }>;
+  } | null>(null);
+  const [difficulty, setDifficulty] = useState('medium');
   const [setupMode, setSetupMode] = useState('standard');
   const [setupData, setSetupData] = useState('');
+  const [sessionStatus, setSessionStatus] = useState<'active' | 'paused'>('active');
 
   // Documents state
   const [documents, setDocuments] = useState<DocumentData[]>([]);
@@ -116,7 +142,7 @@ export default function InterviewPage() {
   useEffect(() => {
     const fetchCandidates = async () => {
       try {
-        const res = await fetch('/api/admin/candidates?limit=100');
+        const res = await fetch('/api/interviewer/candidates?limit=100');
         if (res.ok) {
           const data = await res.json();
           setCandidateList(data.candidates || []);
@@ -128,15 +154,52 @@ export default function InterviewPage() {
     fetchCandidates();
   }, []);
 
-  // Check Search Params for pre-selected candidate
+  // Check Search Params for pre-selected candidate & mode
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const searchParams = new URLSearchParams(window.location.search);
     const candId = searchParams.get('candidateId');
     const candName = searchParams.get('candidateName');
+    const modeParam = searchParams.get('mode');
     if (candId) setSelectedCandidateId(candId);
     if (candName) setCandidateNameInput(candName);
+    if (modeParam === 'revision' || modeParam === 'keywords' || modeParam === 'knowledge-base') {
+      setSetupMode(modeParam);
+    }
+    try {
+      const savedPrefs = window.localStorage.getItem('smartinterview-prefs');
+      if (savedPrefs) {
+        const parsed = JSON.parse(savedPrefs) as { defaultDifficulty?: string };
+        if (parsed.defaultDifficulty) {
+          setDifficulty(normalizeDifficulty(parsed.defaultDifficulty, 'medium'));
+        }
+      }
+    } catch {
+      // Ignore malformed localStorage prefs
+    }
   }, []);
+
+  // Load candidate longitudinal memory summary when an existing candidate is selected
+  useEffect(() => {
+    if (!selectedCandidateId) {
+      setCandidateMemoryHint(null);
+      return;
+    }
+    let active = true;
+    fetch(`/api/interviewer/candidates/${encodeURIComponent(selectedCandidateId)}/memory`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (!active || !data) return;
+        setCandidateMemoryHint({
+          answeringStyle: data.profile?.answeringStyle,
+          recurringWeaknesses: data.recurringWeaknesses || [],
+        });
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [selectedCandidateId]);
 
   // Restore Active Session & Enforce Candidate Guard
   useEffect(() => {
@@ -186,11 +249,16 @@ export default function InterviewPage() {
               setLastEvaluation(data.evaluations[data.evaluations.length - 1].feedback || null);
             }
           }
+          if (Array.isArray(data.pendingSuggestions) && data.pendingSuggestions.length > 0) {
+            setSuggestedQuestions(data.pendingSuggestions);
+          }
 
           const scope = data.session?.scope || {};
           if (scope.mode) setSetupMode(scope.mode);
+          if (scope.subject) setSubject(String(scope.subject));
           if (Array.isArray(scope.selectedDocumentIds)) setSelectedDocIds(scope.selectedDocumentIds);
-          if (data.session?.difficulty) setDifficulty(data.session.difficulty);
+          if (data.session?.difficulty) setDifficulty(normalizeDifficulty(data.session.difficulty, 'medium'));
+          setSessionStatus(data.session?.status === 'paused' ? 'paused' : 'active');
 
           localStorage.setItem('activeInterviewSession', JSON.stringify({ id: activeId, candidateId }));
         } else {
@@ -215,12 +283,12 @@ export default function InterviewPage() {
     }
 
     if (!activeCandidateName) {
-      alert("Please select or enter a candidate name.");
+      showToast("Please select or enter a candidate name.", "warning");
       return;
     }
 
     if (setupMode === 'knowledge-base' && selectedDocIds.length === 0) {
-      alert("Please select at least one Knowledge Base document.");
+      showToast("Please select at least one Knowledge Base document.", "warning");
       return;
     }
 
@@ -237,6 +305,11 @@ export default function InterviewPage() {
         body: JSON.stringify({
           candidateId: selectedCandidateId || undefined,
           candidateName: activeCandidateName,
+          subject: subject.trim() || 'General Technical',
+          subjects: [
+            subject.trim(),
+            ...additionalSubjects.split(',').map((s) => s.trim()).filter(Boolean),
+          ].filter(Boolean),
           difficulty: difficulty,
           mode: setupMode,
           setupData: finalSetupData,
@@ -246,7 +319,7 @@ export default function InterviewPage() {
 
       const data = await res.json();
       if (!res.ok) {
-        alert("Failed to start interview: " + (data.error || "Unknown error"));
+        showToast("Failed to start interview: " + (data.error || "Unknown error"), "error");
         setIsProcessing(false);
         return;
       }
@@ -258,6 +331,7 @@ export default function InterviewPage() {
           candidateName: data.candidate.name || activeCandidateName
         };
         setSession(newSession);
+        setSessionStatus('active');
         setCurrentQuestion(data.firstQuestion);
         setEvaluations([]);
         setSuggestedQuestions([]);
@@ -268,13 +342,17 @@ export default function InterviewPage() {
       }
     } catch (error) {
       console.error("Failed to start live interview", error);
-      alert("Error initializing interview session.");
+      showToast("Error initializing interview session.", "error");
     }
     setIsProcessing(false);
   };
 
   // Submit Answer & Evaluate Handler
   const submitTextAnswer = async () => {
+    if (sessionStatus === 'paused') {
+      showToast('Session is currently paused. Click Resume Interview before submitting an answer.', 'warning');
+      return;
+    }
     if (!textAnswer.trim() || !session || !currentQuestion || isProcessing) return;
     setIsProcessing(true);
 
@@ -296,6 +374,9 @@ export default function InterviewPage() {
 
       const evalFeedback = evalData.evaluation;
       setLastEvaluation(evalFeedback);
+      if (evalData.currentDifficulty) {
+        setDifficulty(normalizeDifficulty(evalData.currentDifficulty, 'medium'));
+      }
 
       const isDuplicate = evaluations.some(e => e.question === currentQuestion?.content);
       if (!isDuplicate) {
@@ -320,12 +401,16 @@ export default function InterviewPage() {
     } catch (error: unknown) {
       console.error("Evaluation failed:", error);
       const msg = error instanceof Error ? error.message : "Unable to submit answer";
-      alert("Evaluation failed: " + msg);
+      showToast("Evaluation failed: " + msg, "error");
     }
     setIsProcessing(false);
   };
 
   const selectNextQuestion = async (suggestion: SuggestionData) => {
+    if (sessionStatus === 'paused') {
+      showToast('Session is currently paused. Click Resume Interview before advancing.', 'warning');
+      return;
+    }
     setIsProcessing(true);
     try {
       const res = await fetch("/api/interview/select-question", {
@@ -345,7 +430,7 @@ export default function InterviewPage() {
         setSttInfo(null);
         setMicError(null);
       } else {
-        alert("Failed to load question: " + data.error);
+        showToast("Failed to load question: " + data.error, "error");
       }
     } catch (e) {
       console.error("Failed to select question", e);
@@ -367,16 +452,89 @@ export default function InterviewPage() {
         body: JSON.stringify({ sessionId: session.id })
       });
       const data = await res.json();
-      localStorage.removeItem('activeInterviewSession');
-      if (data.reportId || session.id) {
-        router.push(`/report/${session.id}`);
-      } else {
-        window.location.reload();
+      if (!res.ok || !data?.success) {
+        showToast("Failed to finalize interview report: " + (data?.error || "Server error. Your session has been preserved; please retry."), "error");
+        setIsProcessing(false);
+        return;
       }
+      localStorage.removeItem('activeInterviewSession');
+      router.push(`/report/${session.id}`);
     } catch (e) {
       console.error("Failed to end interview", e);
+      showToast("Network error while finalizing interview report. Your session has been preserved; please retry.", "error");
+    }
+    setIsProcessing(false);
+  };
+
+  const pauseInterview = async () => {
+    if (!session || isProcessing) return;
+    setIsProcessing(true);
+    try {
+      const res = await fetch('/api/interview/pause', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: session.id }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        showToast('Failed to pause interview: ' + (data.error || 'Unknown error'), 'error');
+      } else {
+        setSessionStatus('paused');
+        showToast('Interview paused.', 'info');
+      }
+    } catch {
+      showToast('Network error while pausing session.', 'error');
+    }
+    setIsProcessing(false);
+  };
+
+  const resumePausedInterview = async () => {
+    if (!session || isProcessing) return;
+    setIsProcessing(true);
+    try {
+      const res = await fetch(`/api/interview/resume?sessionId=${encodeURIComponent(session.id)}&resumePaused=1`);
+      const data = await res.json();
+      if (!res.ok) {
+        showToast('Failed to resume interview: ' + (data.error || 'Unknown error'), 'error');
+      } else {
+        setSessionStatus('active');
+        showToast('Interview resumed.', 'success');
+      }
+    } catch {
+      showToast('Network error while resuming session.', 'error');
+    }
+    setIsProcessing(false);
+  };
+
+  const abandonInterview = async () => {
+    if (!session || isProcessing) return;
+    if (!window.confirm('Abandon this interview session? Existing evaluated answers will remain saved in history, and no final report will be generated.')) {
+      return;
+    }
+    setIsProcessing(true);
+    try {
+      const res = await fetch('/api/interview/abandon', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: session.id }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.success) {
+        showToast('Failed to abandon session: ' + (data?.error || 'Unknown error'), 'error');
+        setIsProcessing(false);
+        return;
+      }
       localStorage.removeItem('activeInterviewSession');
-      window.location.reload();
+      setSession(null);
+      setCurrentQuestion(null);
+      setEvaluations([]);
+      setSuggestedQuestions([]);
+      setLastEvaluation(null);
+      setTextAnswer('');
+      setSessionStatus('active');
+      showToast('Interview session abandoned.', 'info');
+    } catch {
+      showToast('Network error while abandoning session.', 'error');
     }
     setIsProcessing(false);
   };
@@ -556,7 +714,7 @@ export default function InterviewPage() {
     : 0;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', minHeight: 'calc(100vh - 72px - 40px)', background: 'var(--zentra-bg-canvas)' }}>
+    <div className="interview-page-wrapper" style={{ display: 'flex', flexDirection: 'column', minHeight: 'calc(100vh - 72px - 40px)', background: 'var(--zentra-bg-canvas)' }}>
       {/* Top Header Row */}
       <div style={{
         padding: '1.25rem 2rem',
@@ -592,21 +750,50 @@ export default function InterviewPage() {
         </div>
 
         {session && (
-          <button
-            onClick={endInterview}
-            disabled={isProcessing}
-            className="zentra-btn zentra-btn-danger"
-          >
-            <Icon name="check_circle" size={16} />
-            <span>{isProcessing ? 'Finalizing...' : 'End Interview & View Report'}</span>
-          </button>
+          <div style={{ display: 'flex', gap: '0.65rem', flexWrap: 'wrap', alignItems: 'center' }}>
+            {sessionStatus === 'paused' ? (
+              <button
+                onClick={resumePausedInterview}
+                disabled={isProcessing}
+                className="zentra-btn zentra-btn-primary"
+              >
+                <Icon name="play_arrow" size={16} />
+                <span>Resume Interview</span>
+              </button>
+            ) : (
+              <button
+                onClick={pauseInterview}
+                disabled={isProcessing || isRecording}
+                className="zentra-btn zentra-btn-secondary"
+              >
+                <Icon name="pause" size={16} />
+                <span>Pause</span>
+              </button>
+            )}
+            <button
+              onClick={abandonInterview}
+              disabled={isProcessing || isRecording}
+              className="zentra-btn zentra-btn-secondary"
+            >
+              <Icon name="close" size={16} />
+              <span>Abandon</span>
+            </button>
+            <button
+              onClick={endInterview}
+              disabled={isProcessing}
+              className="zentra-btn zentra-btn-danger"
+            >
+              <Icon name="check_circle" size={16} />
+              <span>{isProcessing ? 'Finalizing...' : 'End Interview & View Report'}</span>
+            </button>
+          </div>
         )}
       </div>
 
       {/* Main Workspace Grid */}
-      <div style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
+      <div className="interview-layout-container" style={{ display: 'flex', flex: 1, overflow: 'hidden' }}>
         {/* Main Content Column */}
-        <div style={{ flex: 1, padding: '2rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+        <div className="interview-main-col" style={{ flex: 1, padding: '2rem', overflowY: 'auto', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
           {!session ? (
             /* Setup Configuration Card */
             <div className="zentra-card" style={{ maxWidth: '760px', margin: '0 auto', width: '100%', padding: '2.5rem' }}>
@@ -673,6 +860,57 @@ export default function InterviewPage() {
                   )}
                 </div>
 
+                {/* Subject / Domain */}
+                <div>
+                  <label style={{ display: 'block', color: 'var(--zentra-text-secondary)', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.45rem' }}>Subject / Technical Domain</label>
+                  <input
+                    type="text"
+                    list="subject-presets"
+                    value={subject}
+                    onChange={(e) => setSubject(e.target.value)}
+                    placeholder="e.g. Data Structures & Algorithms, DBMS, System Design"
+                    className="zentra-input"
+                  />
+                  <datalist id="subject-presets">
+                    <option value="Data Structures & Algorithms" />
+                    <option value="Database Management Systems" />
+                    <option value="Operating Systems" />
+                    <option value="Computer Networks" />
+                    <option value="System Design" />
+                    <option value="Object-Oriented Programming" />
+                    <option value="Full-Stack Web Engineering" />
+                  </datalist>
+                </div>
+
+                {/* Combined Multi-Subject Synthesis */}
+                <div>
+                  <label style={{ display: 'block', color: 'var(--zentra-text-secondary)', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.45rem' }}>
+                    Additional Subjects for Combined Questions <span style={{ fontWeight: 400, color: 'var(--zentra-text-muted)' }}>(optional, comma-separated)</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={additionalSubjects}
+                    onChange={(e) => setAdditionalSubjects(e.target.value)}
+                    placeholder="e.g. Computer Networks, Distributed Caching"
+                    className="zentra-input"
+                  />
+                </div>
+
+                {/* Candidate Memory Snapshot Hint */}
+                {candidateMemoryHint && (candidateMemoryHint.answeringStyle || (candidateMemoryHint.recurringWeaknesses?.length ?? 0) > 0) && (
+                  <div style={{ padding: '0.9rem 1rem', borderRadius: '12px', background: 'rgba(37, 99, 235, 0.06)', border: '1px solid rgba(37, 99, 235, 0.2)', fontSize: '0.82rem' }}>
+                    <div style={{ fontWeight: 700, color: '#2563eb', marginBottom: '0.25rem' }}>Candidate Learning Memory Loaded</div>
+                    {candidateMemoryHint.answeringStyle && (
+                      <div style={{ color: 'var(--zentra-text-secondary)' }}>Style: <strong>{candidateMemoryHint.answeringStyle}</strong></div>
+                    )}
+                    {candidateMemoryHint.recurringWeaknesses && candidateMemoryHint.recurringWeaknesses.length > 0 && (
+                      <div style={{ color: 'var(--zentra-text-secondary)', marginTop: '0.2rem' }}>
+                        Weak concepts: {candidateMemoryHint.recurringWeaknesses.slice(0, 4).map((w) => `${w.conceptName} (${Math.round(w.masteryScore)}%)`).join(', ')}
+                      </div>
+                    )}
+                  </div>
+                )}
+
                 {/* Difficulty Tier */}
                 <div>
                   <label style={{ display: 'block', color: 'var(--zentra-text-secondary)', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.45rem' }}>Difficulty</label>
@@ -681,9 +919,10 @@ export default function InterviewPage() {
                     onChange={(e) => setDifficulty(e.target.value)}
                     className="zentra-select"
                   >
-                    <option value="beginner">Beginner (Junior Roles)</option>
-                    <option value="intermediate">Intermediate (Mid-Level Roles)</option>
-                    <option value="advanced">Advanced (Senior / Architect Roles)</option>
+                    <option value="easy">Easy (Foundational / Junior)</option>
+                    <option value="medium">Medium (Mid-Level)</option>
+                    <option value="hard">Hard (Senior)</option>
+                    <option value="expert">Expert (Principal / Architect)</option>
                   </select>
                 </div>
 
@@ -693,6 +932,7 @@ export default function InterviewPage() {
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '0.75rem' }}>
                     {[
                       { id: 'standard', name: 'Standard Adaptive', desc: 'Dynamic AI question curve' },
+                      { id: 'revision', name: 'Targeted Revision', desc: 'Focuses on prior weak & decaying concepts' },
                       { id: 'keywords', name: 'Keyword Focused', desc: 'Target key concepts' },
                       { id: 'knowledge-base', name: 'Knowledge Base Only', desc: 'Restricted to selected documents' },
                     ].map((mode) => {
@@ -737,33 +977,52 @@ export default function InterviewPage() {
                 )}
 
                 {/* Conditional Knowledge Base Document Selector */}
-                {setupMode === 'knowledge-base' && (
-                  <div>
-                    <label style={{ display: 'block', color: 'var(--zentra-text-secondary)', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.45rem' }}>Select Knowledge Base Documents</label>
-                    {documents.length === 0 ? (
-                      <div style={{ color: 'var(--zentra-text-muted)', fontSize: '0.825rem', padding: '1rem', background: 'var(--zentra-bg-muted)', borderRadius: '12px' }}>
-                        No documents available. Upload documents in Knowledge Base first.
-                      </div>
-                    ) : (
-                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '160px', overflowY: 'auto', background: 'var(--zentra-bg-muted)', padding: '0.85rem', borderRadius: '12px', border: '1px solid var(--zentra-border)' }}>
-                        {documents.map((doc: DocumentData) => (
-                          <label key={doc.id} style={{ display: 'flex', alignItems: 'center', gap: '0.65rem', color: 'var(--zentra-text-primary)', cursor: 'pointer', fontSize: '0.85rem' }}>
-                            <input
-                              type="checkbox"
-                              checked={selectedDocIds.includes(doc.id)}
-                              onChange={(e) => {
-                                if (e.target.checked) setSelectedDocIds([...selectedDocIds, doc.id]);
-                                else setSelectedDocIds(selectedDocIds.filter(id => id !== doc.id));
-                              }}
-                              style={{ accentColor: '#2563eb' }}
-                            />
-                            <span>{doc.originalFilename}</span>
-                          </label>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                )}
+                {setupMode === 'knowledge-base' && (() => {
+                  const readyDocs = documents.filter(
+                    (d) =>
+                      d.status === 'PROCESSED' &&
+                      (d.storageStatus ?? 'AVAILABLE') === 'AVAILABLE' &&
+                      (d.chunkCount ?? 0) > 0
+                  );
+                  const unreadyCount = documents.length - readyDocs.length;
+                  return (
+                    <div>
+                      <label style={{ display: 'block', color: 'var(--zentra-text-secondary)', fontSize: '0.85rem', fontWeight: 600, marginBottom: '0.45rem' }}>Select Processed Knowledge Base Documents</label>
+                      {readyDocs.length === 0 ? (
+                        <div style={{ color: 'var(--zentra-text-muted)', fontSize: '0.825rem', padding: '1rem', background: 'var(--zentra-bg-muted)', borderRadius: '12px' }}>
+                          No processed Knowledge Base documents with indexed chunks are available yet. Process documents in Knowledge Base first.
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem', maxHeight: '160px', overflowY: 'auto', background: 'var(--zentra-bg-muted)', padding: '0.85rem', borderRadius: '12px', border: '1px solid var(--zentra-border)' }}>
+                          {readyDocs.map((doc: DocumentData) => (
+                            <label key={doc.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '0.65rem', color: 'var(--zentra-text-primary)', cursor: 'pointer', fontSize: '0.85rem' }}>
+                              <span style={{ display: 'flex', alignItems: 'center', gap: '0.65rem' }}>
+                                <input
+                                  type="checkbox"
+                                  checked={selectedDocIds.includes(doc.id)}
+                                  onChange={(e) => {
+                                    if (e.target.checked) setSelectedDocIds([...selectedDocIds, doc.id]);
+                                    else setSelectedDocIds(selectedDocIds.filter(id => id !== doc.id));
+                                  }}
+                                  style={{ accentColor: '#2563eb' }}
+                                />
+                                <span>{doc.name || doc.originalFilename}</span>
+                              </span>
+                              <span style={{ fontSize: '0.75rem', color: 'var(--zentra-text-muted)' }}>
+                                {doc.chunkCount} chunks
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                      {unreadyCount > 0 && (
+                        <div style={{ marginTop: '0.4rem', fontSize: '0.75rem', color: 'var(--zentra-text-muted)' }}>
+                          {unreadyCount} document(s) hidden because they are still processing, failed, or have 0 indexed chunks.
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
 
 
 
@@ -782,6 +1041,28 @@ export default function InterviewPage() {
           ) : currentQuestion && (
             /* Live Interview Workspace */
             <>
+              {sessionStatus === 'paused' && (
+                <div style={{
+                  padding: '0.85rem 1.15rem',
+                  borderRadius: '12px',
+                  background: 'rgba(245, 158, 11, 0.12)',
+                  border: '1px solid rgba(245, 158, 11, 0.3)',
+                  color: '#d97706',
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: '1rem',
+                  flexWrap: 'wrap',
+                  fontSize: '0.85rem',
+                  fontWeight: 600,
+                }}>
+                  <span>Session is currently paused. Resume the interview to continue evaluating answers.</span>
+                  <button onClick={resumePausedInterview} disabled={isProcessing} className="zentra-btn zentra-btn-primary">
+                    Resume Now
+                  </button>
+                </div>
+              )}
+
               {/* Question Card */}
               <div className="zentra-card">
                 <div className="zentra-card-header" style={{ marginBottom: '1rem' }}>
@@ -793,9 +1074,29 @@ export default function InterviewPage() {
                   </span>
                 </div>
 
-                <h2 style={{ color: 'var(--zentra-text-primary)', fontSize: '1.35rem', lineHeight: 1.5, margin: '0 0 1.5rem 0', fontWeight: 600, letterSpacing: '-0.01em' }}>
+                <h2 style={{ color: 'var(--zentra-text-primary)', fontSize: '1.35rem', lineHeight: 1.5, margin: '0 0 1rem 0', fontWeight: 600, letterSpacing: '-0.01em' }}>
                   {currentQuestion.content}
                 </h2>
+
+                {Array.isArray(currentQuestion.sourceReferences) && currentQuestion.sourceReferences.length > 0 && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.45rem', marginBottom: '1rem' }}>
+                    {currentQuestion.sourceReferences.slice(0, 4).map((src, idx) => (
+                      <span
+                        key={`${src.chunkId}-${idx}`}
+                        style={{
+                          fontSize: '0.72rem',
+                          padding: '0.2rem 0.6rem',
+                          borderRadius: '9999px',
+                          background: 'var(--zentra-bg-muted)',
+                          border: '1px solid var(--zentra-border)',
+                          color: 'var(--zentra-text-secondary)',
+                        }}
+                      >
+                        Source: {src.documentName} (Chunk #{src.chunkIndex + 1}, {Math.round(src.similarity * 100)}%)
+                      </span>
+                    ))}
+                  </div>
+                )}
 
                 <div style={{ height: '1px', background: 'var(--zentra-border-subtle)', margin: '1.25rem 0' }}></div>
 
@@ -974,7 +1275,7 @@ export default function InterviewPage() {
         </div>
 
         {/* Side Panel: Interview Status & Assistant */}
-        <div style={{
+        <div className="interview-side-col" style={{
           width: '320px',
           background: 'var(--zentra-bg-surface)',
           borderLeft: '1px solid var(--zentra-border)',
@@ -990,8 +1291,8 @@ export default function InterviewPage() {
               <h3 style={{ margin: 0, color: 'var(--zentra-text-primary)', fontSize: '1rem', fontWeight: 700 }}>Interviewer Assistant</h3>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', fontSize: '0.775rem', color: 'var(--zentra-text-muted)' }}>
-              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: session ? '#10b981' : '#64748b', display: 'inline-block' }}></span>
-              <span>{session ? 'Session Active' : 'Waiting for Launch'}</span>
+              <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: !session ? '#64748b' : sessionStatus === 'paused' ? '#f59e0b' : '#10b981', display: 'inline-block' }}></span>
+              <span>{!session ? 'Waiting for Launch' : sessionStatus === 'paused' ? 'Session Paused' : 'Session Active'}</span>
             </div>
           </div>
 
@@ -1018,6 +1319,45 @@ export default function InterviewPage() {
                   </span>
                 </div>
               </div>
+
+              {/* Session Q&A History */}
+              {evaluations.length > 0 && (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', maxHeight: '300px', overflowY: 'auto' }}>
+                  <span style={{ color: 'var(--zentra-text-muted)', fontSize: '0.725rem', fontWeight: 600, textTransform: 'uppercase' }}>
+                    Evaluated Q&amp;A History
+                  </span>
+                  {evaluations.map((ev, idx) => (
+                    <div
+                      key={idx}
+                      style={{
+                        background: 'var(--zentra-bg-muted)',
+                        border: '1px solid var(--zentra-border)',
+                        borderRadius: '12px',
+                        padding: '0.75rem',
+                        fontSize: '0.78rem',
+                      }}
+                    >
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+                        <strong style={{ color: 'var(--zentra-text-primary)' }}>Q{idx + 1}</strong>
+                        <span
+                          style={{
+                            fontWeight: 700,
+                            color: (ev.feedback?.score ?? 0) >= 75 ? '#059669' : (ev.feedback?.score ?? 0) >= 50 ? '#d97706' : '#dc2626',
+                          }}
+                        >
+                          {Math.round(ev.feedback?.score ?? 0)}%
+                        </span>
+                      </div>
+                      <div style={{ color: 'var(--zentra-text-secondary)', lineHeight: 1.4, marginBottom: '0.25rem' }}>
+                        {ev.question.length > 90 ? `${ev.question.slice(0, 90)}...` : ev.question}
+                      </div>
+                      <div style={{ color: 'var(--zentra-text-muted)', fontSize: '0.72rem' }}>
+                        Ans: {ev.answer.length > 70 ? `${ev.answer.slice(0, 70)}...` : ev.answer}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </>
           )}
 

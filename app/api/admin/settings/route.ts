@@ -10,6 +10,7 @@ const ALLOWED_KEYS = [
   'rag.top_k',
   'rag.chunk_size',
   'rag.chunk_overlap',
+  'rag.min_similarity',
   'auth.session_timeout_hours',
   'llm.default_provider',
   'llm.primary_provider',
@@ -31,6 +32,7 @@ export async function GET(request: Request) {
     }
 
     const settings = await prisma.appSettings.findMany({
+      where: { key: { in: ALLOWED_KEYS } },
       orderBy: { key: 'asc' },
     })
 

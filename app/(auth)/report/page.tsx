@@ -4,15 +4,15 @@ import React from 'react'
 import Link from 'next/link'
 import { redirect } from 'next/navigation'
 import prisma from '@/lib/db'
-import { getAppSession } from '@/lib/auth'
+import { getValidatedAppSession } from '@/lib/auth-server'
 import Icon from '@/components/Icon'
 import { ReportsListClient, ReportItem } from '@/components/report/ReportsListClient'
 
 export default async function ReportIndexPage() {
-  const session = await getAppSession()
+  const session = await getValidatedAppSession()
 
   if (!session.isLoggedIn || !session.userId) {
-    redirect('/api/auth/logout')
+    redirect('/login')
   }
 
   const userId = session.userId

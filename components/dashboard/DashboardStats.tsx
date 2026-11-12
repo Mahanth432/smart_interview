@@ -5,11 +5,19 @@ interface DashboardStatsProps {
   totalSessions: number
   completedSessions: number
   activeSession: { candidate?: { name?: string } } | null
+  activeSessionCount?: number
   averageScore?: number | null
 }
 
-export const DashboardStats = ({ totalSessions, completedSessions, activeSession, averageScore }: DashboardStatsProps) => {
+export const DashboardStats = ({
+  totalSessions,
+  completedSessions,
+  activeSession,
+  activeSessionCount,
+  averageScore,
+}: DashboardStatsProps) => {
   const completionRate = totalSessions > 0 ? Math.round((completedSessions / totalSessions) * 100) : 0
+  const liveCount = activeSessionCount ?? (activeSession ? 1 : 0)
 
   return (
     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1.25rem', marginBottom: '1.75rem' }}>
@@ -52,19 +60,19 @@ export const DashboardStats = ({ totalSessions, completedSessions, activeSession
       </div>
 
       {/* Live / In-Progress */}
-      <div className="zentra-card" style={{ borderColor: activeSession ? 'rgba(245, 158, 11, 0.4)' : undefined }}>
+      <div className="zentra-card" style={{ borderColor: liveCount > 0 ? 'rgba(245, 158, 11, 0.4)' : undefined }}>
         <div className="zentra-card-header" style={{ marginBottom: '0.75rem' }}>
           <span className="zentra-metric-label">Live Active Sessions</span>
-          <span className={`zentra-pill-tag ${activeSession ? 'green' : ''}`}>
-            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: activeSession ? '#10b981' : '#94a3b8', display: 'inline-block' }}></span>
-            {activeSession ? 'In Progress' : 'Idle'}
+          <span className={`zentra-pill-tag ${liveCount > 0 ? 'green' : ''}`}>
+            <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: liveCount > 0 ? '#10b981' : '#94a3b8', display: 'inline-block' }}></span>
+            {liveCount > 0 ? 'In Progress' : 'Idle'}
           </span>
         </div>
-        <div className="zentra-metric-num" style={{ color: activeSession ? '#f59e0b' : 'var(--zentra-text-primary)' }}>
-          {activeSession ? 1 : 0}
+        <div className="zentra-metric-num" style={{ color: liveCount > 0 ? '#f59e0b' : 'var(--zentra-text-primary)' }}>
+          {liveCount}
         </div>
         <div className="zentra-metric-sub">
-          {activeSession ? `Active candidate: ${activeSession.candidate?.name || 'In Progress'}` : 'No active sessions'}
+          {activeSession ? `Latest candidate: ${activeSession.candidate?.name || 'In Progress'}` : 'No active sessions'}
         </div>
       </div>
     </div>

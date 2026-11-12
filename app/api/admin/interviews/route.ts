@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
-import { getAppSession } from '@/lib/auth'
+import { getValidatedAppSession } from '@/lib/auth-server'
+import { parsePaginationParams } from '@/lib/validation/query'
 import prisma from '@/lib/db'
 import { Prisma } from '@prisma/client'
 
@@ -8,7 +9,7 @@ import { formatInterviewerName } from '@/lib/formatters'
 export async function GET(request: Request) {
   try {
     const response = NextResponse.json({})
-    const session = await getAppSession(request, response)
+    const session = await getValidatedAppSession(request, response)
 
     if (!session?.isLoggedIn || !session.userId) {
       return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 })
@@ -21,8 +22,8 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url)
     const search = searchParams.get('search') || ''
     const status = searchParams.get('status') || 'ALL'
-    const page = Math.max(1, parseInt(searchParams.get('page') || '1', 10))
-    const limit = Math.max(1, Math.min(100, parseInt(searchParams.get('limit') || '20', 10)))
+    const { page, limit, skip } = parsePaginationParams(searchParams, { defaultLimit: 20, maxLimit: 100 })
+    // limit parsed via parsePaginationParams above
 
     const where: Prisma.InterviewSessionWhereInput = {}
 
@@ -74,7 +75,7 @@ export async function GET(request: Request) {
           },
         },
         orderBy: { startedAt: 'desc' },
-        skip: (page - 1) * limit,
+        skip,
         take: limit,
       }),
     ])

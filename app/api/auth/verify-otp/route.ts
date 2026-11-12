@@ -1,126 +1,63 @@
-import { NextRequest, NextResponse } from 'next/server';
-import crypto from 'crypto';
-import prisma from '@/lib/db';
-import { verifyOtpHash, OTP_MAX_ATTEMPTS } from '@/lib/otp';
-import { getAppSession, getServerInstanceId } from '@/lib/auth';
-import { createAuditLog } from '@/lib/audit-log';
+import { NextRequest, NextResponse } from 'next/server'
+import crypto from 'crypto'
+import prisma from '@/lib/db'
+import { hashToken } from '@/lib/otp'
+import { verifyAndConsumeOtp, type OtpPurpose } from '@/lib/otp-store'
+import { establishUserSession } from '@/lib/auth-server'
+import { createAuditLog } from '@/lib/audit-log'
+import { checkRateLimit, extractClientIp, rateLimitResponse } from '@/lib/rate-limit'
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { email, otp, role, purpose = 'EMAIL_VERIFICATION' } = body;
+    const clientIp = extractClientIp(req)
+    const ipLimit = await checkRateLimit({
+      key: `verify-otp:ip:${clientIp}`,
+      limit: 20,
+      windowSeconds: 15 * 60,
+    })
+    if (!ipLimit.allowed) {
+      return rateLimitResponse(
+        ipLimit.retryAfterSeconds,
+        'Too many verification attempts. Please wait before trying again.'
+      )
+    }
+
+    const body = await req.json()
+    const { email, otp, role, purpose = 'EMAIL_VERIFICATION' } = body
 
     if (!email || !otp) {
-      return NextResponse.json({ error: 'Email and verification code are required.' }, { status: 400 });
+      return NextResponse.json({ error: 'Email and verification code are required.' }, { status: 400 })
     }
 
-    const normalizedEmail = email.trim().toLowerCase();
-    const cleanOtp = otp.toString().trim();
-    const targetPurpose = purpose === 'PASSWORD_RESET' ? 'PASSWORD_RESET' : 'EMAIL_VERIFICATION';
+    const normalizedEmail = String(email).trim().toLowerCase()
+    const cleanOtp = String(otp).trim()
+    const targetPurpose: OtpPurpose =
+      purpose === 'PASSWORD_RESET' ? 'PASSWORD_RESET' : 'EMAIL_VERIFICATION'
 
     if (!/^\d{6}$/.test(cleanOtp)) {
-      return NextResponse.json({ error: 'Verification code must be a 6-digit number.' }, { status: 400 });
+      return NextResponse.json({ error: 'Verification code must be a 6-digit number.' }, { status: 400 })
     }
 
-    // Find the latest unused OTP record for this email AND exact purpose
-    const otpRecord = await prisma.otpVerification.findFirst({
-      where: {
-        email: normalizedEmail,
-        purpose: targetPurpose,
-        usedAt: null,
-      },
-      orderBy: { createdAt: 'desc' },
-      include: { user: true },
-    });
+    const result = await verifyAndConsumeOtp({
+      email: normalizedEmail,
+      otp: cleanOtp,
+      purpose: targetPurpose,
+    })
 
-    if (!otpRecord) {
+    if (!result.ok) {
       createAuditLog({
+        userId: result.userId ?? undefined,
         action: targetPurpose === 'PASSWORD_RESET' ? 'PASSWORD_RESET_OTP_FAILED' : 'EMAIL_VERIFICATION_FAILED',
         status: 'FAILURE',
-        metadata: { email: normalizedEmail, reason: 'No active OTP found for purpose', purpose: targetPurpose },
-      });
-      return NextResponse.json(
-        { error: 'No active verification code found for this request. Please request a new code.' },
-        { status: 400 }
-      );
+        metadata: { email: normalizedEmail, reason: result.reason, attempts: result.attempts, purpose: targetPurpose },
+      })
+      return NextResponse.json({ error: result.error }, { status: 400 })
     }
 
-    // Check expiration
-    if (otpRecord.expiresAt < new Date()) {
-      await prisma.otpVerification.update({
-        where: { id: otpRecord.id },
-        data: { usedAt: new Date() },
-      });
-      createAuditLog({
-        userId: otpRecord.userId ?? undefined,
-        action: targetPurpose === 'PASSWORD_RESET' ? 'PASSWORD_RESET_OTP_FAILED' : 'EMAIL_VERIFICATION_FAILED',
-        status: 'FAILURE',
-        metadata: { email: normalizedEmail, reason: 'Expired OTP', purpose: targetPurpose },
-      });
-      return NextResponse.json(
-        { error: 'This verification code has expired. Please request a new code.' },
-        { status: 400 }
-      );
-    }
+    let user = result.userId
+      ? await prisma.user.findUnique({ where: { id: result.userId } })
+      : null
 
-    // Check maximum attempts
-    if (otpRecord.attempts >= OTP_MAX_ATTEMPTS) {
-      await prisma.otpVerification.update({
-        where: { id: otpRecord.id },
-        data: { usedAt: new Date() },
-      });
-      createAuditLog({
-        userId: otpRecord.userId ?? undefined,
-        action: targetPurpose === 'PASSWORD_RESET' ? 'PASSWORD_RESET_OTP_FAILED' : 'EMAIL_VERIFICATION_FAILED',
-        status: 'FAILURE',
-        metadata: { email: normalizedEmail, reason: 'Max attempts exceeded', purpose: targetPurpose },
-      });
-      return NextResponse.json(
-        { error: 'Too many incorrect attempts. This code has been invalidated. Please request a new code.' },
-        { status: 400 }
-      );
-    }
-
-    // Verify OTP hash
-    const isValid = verifyOtpHash(cleanOtp, otpRecord.otpHash);
-
-    if (!isValid) {
-      const newAttempts = otpRecord.attempts + 1;
-      await prisma.otpVerification.update({
-        where: { id: otpRecord.id },
-        data: {
-          attempts: newAttempts,
-          usedAt: newAttempts >= OTP_MAX_ATTEMPTS ? new Date() : null,
-        },
-      });
-
-      createAuditLog({
-        userId: otpRecord.userId ?? undefined,
-        action: targetPurpose === 'PASSWORD_RESET' ? 'PASSWORD_RESET_OTP_FAILED' : 'EMAIL_VERIFICATION_FAILED',
-        status: 'FAILURE',
-        metadata: { email: normalizedEmail, attempts: newAttempts, purpose: targetPurpose },
-      });
-
-      const remaining = OTP_MAX_ATTEMPTS - newAttempts;
-      return NextResponse.json(
-        {
-          error:
-            remaining > 0
-              ? `Incorrect verification code. ${remaining} attempt(s) remaining.`
-              : 'Too many incorrect attempts. This code has been invalidated. Please request a new code.',
-        },
-        { status: 400 }
-      );
-    }
-
-    // OTP is valid! Mark as used atomically
-    await prisma.otpVerification.update({
-      where: { id: otpRecord.id },
-      data: { usedAt: new Date() },
-    });
-
-    // Lookup user
-    let user = otpRecord.user;
     if (!user) {
       user = await prisma.user.findFirst({
         where: {
@@ -130,30 +67,36 @@ export async function POST(req: NextRequest) {
             { candidate: { email: normalizedEmail } },
           ],
         },
-      });
+        orderBy: { id: 'asc' },
+      })
     }
 
     if (!user) {
-      return NextResponse.json({ error: 'Account not found.' }, { status: 404 });
+      return NextResponse.json({ error: 'Account not found.' }, { status: 404 })
     }
 
     // --- FLOW: PASSWORD RESET ---
     if (targetPurpose === 'PASSWORD_RESET') {
-      // Issue a single-use reset authorization token
-      const resetToken = crypto.randomUUID();
-      const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
+      const resetToken = crypto.randomBytes(32).toString('hex')
+      const tokenHash = hashToken(resetToken)
+      const expiresAt = new Date(Date.now() + 10 * 60 * 1000)
 
-      // Store in AppSettings
-      await prisma.appSettings.upsert({
-        where: { key: `pwd_reset_${resetToken}` },
-        update: {
-          value: JSON.stringify({ userId: user.id, email: normalizedEmail, expiresAt }),
-        },
-        create: {
-          key: `pwd_reset_${resetToken}`,
-          value: JSON.stringify({ userId: user.id, email: normalizedEmail, expiresAt }),
-        },
-      });
+      await prisma.$transaction([
+        // Opportunistic cleanup of expired tokens + invalidate prior unused reset tokens for user
+        prisma.passwordResetToken.deleteMany({
+          where: {
+            OR: [{ expiresAt: { lt: new Date() } }, { userId: user.id, usedAt: null }],
+          },
+        }),
+        prisma.passwordResetToken.create({
+          data: {
+            tokenHash,
+            userId: user.id,
+            email: normalizedEmail,
+            expiresAt,
+          },
+        }),
+      ])
 
       createAuditLog({
         userId: user.id,
@@ -161,60 +104,50 @@ export async function POST(req: NextRequest) {
         action: 'PASSWORD_RESET_OTP_VERIFIED',
         status: 'SUCCESS',
         metadata: { email: normalizedEmail },
-      });
+      })
 
-      // No session is created during password reset!
       return NextResponse.json({
         success: true,
         resetToken,
         message: 'Verification code confirmed. You can now set a new password.',
-      });
+      })
     }
 
-    // --- FLOW: EMAIL VERIFICATION (Account registration) ---
-    // If role was supplied, verify it matches
+    // --- FLOW: EMAIL VERIFICATION ---
     if (role && user.role !== role) {
-      return NextResponse.json({ error: 'Account role mismatch.' }, { status: 403 });
+      return NextResponse.json({ error: 'Account role mismatch.' }, { status: 403 })
     }
 
-    // Mark email as verified
-    await prisma.user.update({
-      where: { id: user.id },
-      data: { emailVerified: true },
-    });
+    await prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: user.id },
+        data: { emailVerified: true },
+      })
 
-    // Ensure Candidate record exists if CANDIDATE
-    if (user.role === 'CANDIDATE') {
-      const existingCandidate = await prisma.candidate.findUnique({
-        where: { userId: user.id },
-      });
-      if (!existingCandidate) {
-        await prisma.candidate.create({
-          data: {
-            userId: user.id,
-            name: user.name || user.username,
-            email: normalizedEmail,
-          },
-        });
+      if (user.role === 'CANDIDATE') {
+        const existingCandidate = await tx.candidate.findUnique({
+          where: { userId: user.id },
+        })
+        if (!existingCandidate) {
+          await tx.candidate.create({
+            data: {
+              userId: user.id,
+              name: user.name || user.username,
+              email: normalizedEmail,
+            },
+          })
+        }
       }
-    }
+    })
 
-    // Establish iron-session after successful registration verification
     const redirectMap: Record<string, string> = {
       ADMIN: '/admin',
       INTERVIEWER: '/dashboard',
       CANDIDATE: '/candidate',
-    };
-    const redirectUrl = redirectMap[user.role] || '/dashboard';
-    const response = NextResponse.json({ success: true, redirect: redirectUrl });
-    const session = await getAppSession(req as unknown as Request, response as unknown as Response);
-
-    session.userId = user.id;
-    session.username = user.username;
-    session.role = user.role;
-    session.instanceId = getServerInstanceId();
-    session.isLoggedIn = true;
-    await session.save();
+    }
+    const redirectUrl = redirectMap[user.role] || '/dashboard'
+    const response = NextResponse.json({ success: true, redirect: redirectUrl })
+    await establishUserSession(req, response, user)
 
     createAuditLog({
       userId: user.id,
@@ -222,11 +155,11 @@ export async function POST(req: NextRequest) {
       action: 'USER_EMAIL_VERIFIED',
       status: 'SUCCESS',
       metadata: { role: user.role, email: normalizedEmail },
-    });
+    })
 
-    return response;
+    return response
   } catch (err) {
-    console.error('verify-otp error:', err);
-    return NextResponse.json({ error: 'Failed to verify code.' }, { status: 500 });
+    console.error('verify-otp error:', err)
+    return NextResponse.json({ error: 'Failed to verify code.' }, { status: 500 })
   }
 }

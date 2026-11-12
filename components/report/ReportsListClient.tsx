@@ -3,6 +3,7 @@
 import React, { useState, useMemo } from 'react'
 import Link from 'next/link'
 import Icon from '@/components/Icon'
+import { formatInterviewerName } from '@/lib/formatters'
 
 export interface ReportItem {
   id: string
@@ -91,23 +92,26 @@ export function ReportsListClient({ reports, role }: ReportsListClientProps) {
   }, [reports, search, scoreFilter, sortBy])
 
   const getScoreBadgeClass = (score: number | null) => {
-    if (score === null) return 'zentra-badge-neutral'
-    if (score >= 75) return 'zentra-badge-success'
-    if (score >= 50) return 'zentra-badge-warning'
-    return 'zentra-badge-error'
+    if (score === null) return 'neutral'
+    if (score >= 75) return 'success'
+    if (score >= 50) return 'warning'
+    return 'danger'
   }
 
   const getDifficultyBadgeClass = (diff: string) => {
     switch (diff.toLowerCase()) {
       case 'easy':
-        return 'zentra-badge-success'
+      case 'beginner':
+        return 'success'
       case 'medium':
       case 'intermediate':
-        return 'zentra-badge-info'
+        return 'info'
       case 'hard':
-        return 'zentra-badge-warning'
+      case 'advanced':
+      case 'expert':
+        return 'warning'
       default:
-        return 'zentra-badge-neutral'
+        return 'neutral'
     }
   }
 
@@ -349,7 +353,7 @@ export function ReportsListClient({ reports, role }: ReportsListClientProps) {
                       {!isCandidate && (
                         <td style={{ padding: '1rem 1rem' }}>
                           <div style={{ fontWeight: 500, color: 'var(--zentra-text-secondary)' }}>
-                            {item.interviewer?.username || 'System Lead'}
+                            {formatInterviewerName(item.interviewer)}
                           </div>
                           <span style={{ fontSize: '0.725rem', color: 'var(--zentra-text-muted)' }}>Interviewer</span>
                         </td>

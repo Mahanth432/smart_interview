@@ -1,19 +1,30 @@
 import { NextResponse } from 'next/server'
-
-import { getAppSession } from '@/lib/auth'
-import { searchChunks } from '@/lib/knowledge-base/searchChunks'
+import { getValidatedAppSession } from '@/lib/auth-server'
+import { formatRagContextWithCitations, searchChunks } from '@/lib/knowledge-base/searchChunks'
 import { generateLLMResponse } from '@/lib/llm'
+import { checkRateLimit, rateLimitResponse } from '@/lib/rate-limit'
+
+export const maxDuration = 60
 
 export async function POST(request: Request) {
   try {
     const response = NextResponse.json({})
-    const session = await getAppSession(request, response)
+    const session = await getValidatedAppSession(request, response)
 
     if (!session?.isLoggedIn || !session.userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
     if (session.role === 'CANDIDATE') {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
+
+    const rateLimit = await checkRateLimit({
+      key: `rag:query:user:${session.userId}`,
+      limit: 40,
+      windowSeconds: 15 * 60,
+    })
+    if (!rateLimit.allowed) {
+      return rateLimitResponse(rateLimit.retryAfterSeconds)
     }
 
     const body = await request.json()
@@ -23,24 +34,32 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Query is required' }, { status: 400 })
     }
 
-    // 1. Search for relevant context using local MiniLM embeddings & pgvector
-    const topK = 5
+    const topK =
+      typeof body.topK === 'number' && Number.isFinite(body.topK)
+        ? Math.max(1, Math.min(20, Math.floor(body.topK)))
+        : undefined
     const results = await searchChunks(query, session.userId, topK)
-    
-    // 2. Build the context string
-    const contextText = results.map(r => `Document: ${r.documentName}\nExcerpt:\n${r.content}`).join('\n\n')
+    const { contextText, sources } = formatRagContextWithCitations(results)
 
-    // 3. Build the prompt for Gemini
+    if (!contextText) {
+      return NextResponse.json({
+        success: true,
+        answer:
+          'No sufficiently relevant passages were found in your processed Knowledge Base documents for this query.',
+        sources: [],
+      })
+    }
+
     const prompt = `You are a helpful assistant answering questions based on the provided document context.
 
 Instructions:
 - Answer the user's question using the retrieved context when relevant.
+- Cite the relevant document name(s) in your answer when referencing facts.
 - Do not invent information that is not supported by the context.
 - If the context does not contain enough information, clearly say so.
-- Give a concise but useful answer.
 
 Context:
-${contextText || '(No relevant context found)'}
+${contextText}
 
 Question:
 ${query}
@@ -48,10 +67,10 @@ ${query}
 Answer:
 `
 
-    // 4. Send prompt to centrally managed LLM with automatic failover
-    // Only ADMIN users can specify a forced provider for controlled testing
     const adminForcedProvider =
-      session.role === 'ADMIN' && typeof body.forceProvider === 'string' && (body.forceProvider === 'gemini' || body.forceProvider === 'groq')
+      session.role === 'ADMIN' &&
+      typeof body.forceProvider === 'string' &&
+      (body.forceProvider === 'gemini' || body.forceProvider === 'groq')
         ? body.forceProvider
         : undefined
 
@@ -60,12 +79,10 @@ Answer:
     return NextResponse.json({
       success: true,
       answer,
-      sources: results
+      sources,
     })
   } catch (err) {
     const { handleLLMError } = await import('@/lib/llm')
     return handleLLMError(err)
   }
 }
-
-

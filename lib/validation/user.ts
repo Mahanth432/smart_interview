@@ -36,9 +36,14 @@ export function validateEmail(email: string): string | null {
   return null
 }
 
+export const PASSWORD_MAX_BYTES = 72
+
 export function validatePasswordStrength(password: string): string | null {
   if (typeof password !== 'string' || password.length < PASSWORD_MIN_LENGTH) {
     return `Password must be at least ${PASSWORD_MIN_LENGTH} characters long.`
+  }
+  if (Buffer.byteLength(password, 'utf8') > PASSWORD_MAX_BYTES) {
+    return `Password must not exceed ${PASSWORD_MAX_BYTES} bytes.`
   }
   if (!/[0-9!@#$%^&*()_+\-=\[\]{}|;:,.<>?]/.test(password)) {
     return 'Password must contain at least one number or special character.'

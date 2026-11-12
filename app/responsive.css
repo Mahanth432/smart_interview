@@ -32,6 +32,20 @@
     overflow-x: auto;
   }
 
+  .admin-sidebar-nav {
+    flex-direction: row !important;
+    align-items: center !important;
+    gap: 0.45rem !important;
+    padding: 0.25rem 0 !important;
+    flex-wrap: nowrap !important;
+  }
+
+  .admin-sidebar-nav a {
+    flex-shrink: 0 !important;
+    white-space: nowrap !important;
+    padding: 0.5rem 0.85rem !important;
+  }
+
   .sidebar-nav ul {
     flex-direction: row !important;
     gap: 0.5rem !important;

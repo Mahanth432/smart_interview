@@ -27,7 +27,7 @@ export async function GET(request: Request) {
     }
 
     const reqUrl = new URL(request.url)
-    const shouldReconcile = reqUrl.searchParams.get('reconcile') !== '0'
+    const shouldReconcile = reqUrl.searchParams.get('reconcile') === '1'
     let syncStatus: StorageSyncSummary | null = null
 
     if (shouldReconcile) {

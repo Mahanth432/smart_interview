@@ -8,6 +8,10 @@ export const dynamic = 'force-dynamic'
 
 export default async function AdminDashboardPage() {
   const t0 = performance.now()
+  const sevenDaysAgo = new Date()
+  sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6)
+  sevenDaysAgo.setHours(0, 0, 0, 0)
+
   const [
     totalUsers,
     totalInterviewers,
@@ -18,6 +22,7 @@ export default async function AdminDashboardPage() {
     scoreAgg,
     totalDocuments,
     recentSessions,
+    weekSessions,
     technicalCount,
     behavioralCount,
   ] = await Promise.all([
@@ -26,7 +31,7 @@ export default async function AdminDashboardPage() {
     prisma.candidate.count(),
     prisma.interviewSession.count(),
     prisma.interviewSession.count({ where: { status: 'completed' } }),
-    prisma.interviewSession.count({ where: { status: 'active' } }),
+    prisma.interviewSession.count({ where: { status: { in: ['active', 'paused'] } } }),
     prisma.interviewSession.aggregate({
       where: { score: { not: null } },
       _avg: { score: true },
@@ -40,6 +45,10 @@ export default async function AdminDashboardPage() {
         interviewer: { select: { username: true } },
         report: { select: { id: true, overallScore: true } },
       },
+    }),
+    prisma.interviewSession.findMany({
+      where: { startedAt: { gte: sevenDaysAgo } },
+      select: { startedAt: true },
     }),
     prisma.interviewSession.count({ where: { interviewType: { contains: 'technical', mode: 'insensitive' } } }),
     prisma.interviewSession.count({ where: { interviewType: { contains: 'behavioral', mode: 'insensitive' } } }),
@@ -61,7 +70,7 @@ export default async function AdminDashboardPage() {
     const d = new Date()
     d.setDate(now.getDate() - i)
     const dayStr = d.toLocaleDateString('en-US', { weekday: 'short' })
-    const dayCount = recentSessions.filter(s => {
+    const dayCount = weekSessions.filter(s => {
       const sDate = new Date(s.startedAt)
       return sDate.toDateString() === d.toDateString()
     }).length

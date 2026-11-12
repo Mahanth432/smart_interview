@@ -738,3 +738,74 @@ input:checked + .slider.round:before {
   transform: translateX(20px);
 }
 
+/* ==========================================================================
+   COMPATIBILITY ALIASES (Badges, Metric Cards, Ghost Buttons)
+   ========================================================================== */
+
+.zentra-badge-info {
+  background: rgba(37, 99, 235, 0.1);
+  color: #2563eb;
+  border: 1px solid rgba(37, 99, 235, 0.2);
+}
+
+.zentra-badge-success {
+  background: rgba(16, 185, 129, 0.12);
+  color: #059669;
+  border: 1px solid rgba(16, 185, 129, 0.25);
+}
+
+.zentra-badge-warning {
+  background: rgba(245, 158, 11, 0.12);
+  color: #d97706;
+  border: 1px solid rgba(245, 158, 11, 0.25);
+}
+
+.zentra-badge-error,
+.zentra-badge-danger {
+  background: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+  border: 1px solid rgba(239, 68, 68, 0.2);
+}
+
+.zentra-badge-neutral {
+  background: var(--zentra-bg-muted);
+  color: var(--zentra-text-secondary);
+  border: 1px solid var(--zentra-border);
+}
+
+.zentra-badge.primary {
+  background: rgba(99, 102, 241, 0.12);
+  color: #4f46e5;
+  border: 1px solid rgba(99, 102, 241, 0.25);
+}
+
+.zentra-metric-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 0.25rem;
+}
+
+.zentra-metric-value {
+  font-size: 1.85rem;
+  font-weight: 800;
+  line-height: 1.15;
+  color: var(--zentra-text-primary);
+  letter-spacing: -0.02em;
+}
+
+.zentra-metric-subtext {
+  font-size: 0.78rem;
+  color: var(--zentra-text-muted);
+}
+
+.zentra-btn-ghost {
+  background: transparent;
+  color: var(--zentra-text-secondary);
+  border: 1px solid transparent;
+}
+
+.zentra-btn-ghost:hover:not(:disabled) {
+  background: var(--zentra-bg-muted);
+  color: var(--zentra-text-primary);
+}

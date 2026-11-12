@@ -1,85 +1,83 @@
-import prisma from "../db";
+import prisma from '../db'
+import { normalizeDifficulty, stepDifficulty } from './difficulty'
 
 export async function determineNextQuestionParams(sessionId: string) {
-  // Fetch session with questions and evaluations
   const session = await prisma.interviewSession.findUnique({
     where: { id: sessionId },
     include: {
       questions: {
         include: { answer: { include: { evaluation: true } } },
-        orderBy: { askedAt: "asc" }
+        orderBy: { askedAt: 'asc' },
       },
       gaps: true,
-    }
-  });
+    },
+  })
 
-  if (!session) throw new Error("Session not found");
+  if (!session) throw new Error('Session not found')
 
-  const totalQuestions = session.questions.length;
-  const lastQuestion = session.questions[totalQuestions - 1];
-  let currentDifficulty = session.difficulty;
+  const totalQuestions = session.questions.length
+  const lastQuestion = session.questions[totalQuestions - 1]
+  const lastScore = lastQuestion?.answer?.evaluation?.score
+  const currentDifficulty =
+    typeof lastScore === 'number'
+      ? stepDifficulty(session.difficulty, lastScore)
+      : normalizeDifficulty(session.difficulty, 'medium')
 
-  if (lastQuestion?.answer?.evaluation) {
-    const lastScore = lastQuestion.answer.evaluation.score;
-    // Adaptive Difficulty Stepping Logic
-    if (lastScore >= 80 && currentDifficulty !== "expert") {
-      if (currentDifficulty === "easy") currentDifficulty = "medium";
-      else if (currentDifficulty === "medium") currentDifficulty = "hard";
-      else if (currentDifficulty === "hard") currentDifficulty = "expert";
-    } else if (lastScore <= 40 && currentDifficulty !== "easy") {
-      if (currentDifficulty === "expert") currentDifficulty = "hard";
-      else if (currentDifficulty === "hard") currentDifficulty = "medium";
-      else if (currentDifficulty === "medium") currentDifficulty = "easy";
-    }
+  if (currentDifficulty !== session.difficulty) {
+    await prisma.interviewSession.update({
+      where: { id: sessionId },
+      data: { difficulty: currentDifficulty },
+    })
   }
 
-  // Update session difficulty
-  await prisma.interviewSession.update({
-    where: { id: sessionId },
-    data: { difficulty: currentDifficulty }
-  });
-
-  // Extract prior questions (excluding the current question that was just answered)
   const priorAnsweredQuestions = session.questions.filter(
-    q => q.answer && q.id !== lastQuestion?.id
-  );
+    (q) => q.answer && q.id !== lastQuestion?.id
+  )
 
-  const earlierContextLines = priorAnsweredQuestions.map(q => {
-    const scoreText = q.answer?.evaluation?.score !== undefined ? `${q.answer.evaluation.score}/100` : "unscored";
+  const earlierContextLines = priorAnsweredQuestions.map((q) => {
+    const scoreText =
+      q.answer?.evaluation?.score !== undefined ? `${q.answer.evaluation.score}/100` : 'unscored'
     const transcriptSnippet = q.answer?.transcript
-      ? (q.answer.transcript.length > 120 ? q.answer.transcript.slice(0, 120) + "..." : q.answer.transcript)
-      : "No answer recorded";
-    return `[Q${q.questionNumber}: "${q.content}"] -> Answer: "${transcriptSnippet}" (Score: ${scoreText})`;
-  });
+      ? q.answer.transcript.length > 160
+        ? q.answer.transcript.slice(0, 160) + '...'
+        : q.answer.transcript
+      : 'No answer recorded'
+    return `[Q${q.questionNumber}: "${q.content}"] -> Answer: "${transcriptSnippet}" (Score: ${scoreText})`
+  })
 
-  const earlierContextText = earlierContextLines.length > 0
-    ? earlierContextLines.join("\n")
-    : "None (This is the first evaluated question in this session)";
+  const earlierContextText =
+    earlierContextLines.length > 0
+      ? earlierContextLines.join('\n')
+      : 'None (This is the first evaluated question in this session)'
 
-  const uniqueWeakConcepts = Array.from(new Set(session.gaps.map(g => g.concept).filter(Boolean)));
+  const uniqueWeakConcepts = Array.from(
+    new Set(session.gaps.map((g) => g.concept).filter(Boolean))
+  )
 
   return {
     difficulty: currentDifficulty,
-    previousQuestions: session.questions.map(q => q.content),
+    previousQuestions: session.questions.map((q) => q.content),
     weakConcepts: uniqueWeakConcepts,
     earlierContextText,
-    sessionHistory: priorAnsweredQuestions.map(q => ({
+    sessionHistory: priorAnsweredQuestions.map((q) => ({
       questionNumber: q.questionNumber,
       question: q.content,
-      answer: q.answer?.transcript || "",
+      answer: q.answer?.transcript || '',
       score: q.answer?.evaluation?.score ?? null,
-      feedback: q.answer?.evaluation?.feedback ?? null
+      feedback: q.answer?.evaluation?.feedback ?? null,
     })),
-    lastQuestion: lastQuestion ? {
-      id: lastQuestion.id,
-      content: lastQuestion.content,
-      type: lastQuestion.type,
-      difficulty: lastQuestion.difficulty,
-      topic: lastQuestion.topic,
-      expectedAnswer: lastQuestion.expectedAnswer
-    } : null,
-    lastEvaluation: lastQuestion?.answer?.evaluation || null
-  };
+    lastQuestion: lastQuestion
+      ? {
+          id: lastQuestion.id,
+          content: lastQuestion.content,
+          type: lastQuestion.type,
+          difficulty: lastQuestion.difficulty,
+          topic: lastQuestion.topic,
+          expectedAnswer: lastQuestion.expectedAnswer,
+        }
+      : null,
+    lastEvaluation: lastQuestion?.answer?.evaluation || null,
+  }
 }
 
 export async function updateSessionState(sessionId: string) {
@@ -87,20 +85,46 @@ export async function updateSessionState(sessionId: string) {
     where: { id: sessionId },
     include: {
       questions: {
-        include: { answer: { include: { evaluation: true } } }
-      }
-    }
-  });
+        include: { answer: { include: { evaluation: true } } },
+      },
+    },
+  })
 
-  if (!session) return;
+  if (!session) return
 
-  const evals = session.questions.map(q => q.answer?.evaluation).filter(Boolean);
-  if (evals.length === 0) return;
+  const evaluatedQuestions = session.questions.filter((q) => q.answer?.evaluation)
+  if (evaluatedQuestions.length === 0) return
 
-  const totalScore = evals.reduce((sum, ev) => sum + (ev?.score || 0), 0) / evals.length;
+  const totalScore =
+    evaluatedQuestions.reduce((sum, q) => sum + (q.answer?.evaluation?.score ?? 0), 0) /
+    evaluatedQuestions.length
+
+  const topicAgg = new Map<string, { sum: number; count: number }>()
+  for (const q of evaluatedQuestions) {
+    const topic = (q.topic || 'General').trim()
+    const score = q.answer?.evaluation?.score ?? 0
+    const entry = topicAgg.get(topic) ?? { sum: 0, count: 0 }
+    entry.sum += score
+    entry.count += 1
+    topicAgg.set(topic, entry)
+  }
+
+  const topicsCovered = Array.from(topicAgg.keys())
+  const strongTopics: string[] = []
+  const weakTopics: string[] = []
+  for (const [topic, { sum, count }] of topicAgg.entries()) {
+    const avg = sum / count
+    if (avg >= 75) strongTopics.push(topic)
+    else if (avg < 60) weakTopics.push(topic)
+  }
 
   await prisma.interviewSession.update({
     where: { id: sessionId },
-    data: { score: totalScore }
-  });
+    data: {
+      score: Math.round(totalScore * 100) / 100,
+      topicsCovered,
+      strongTopics,
+      weakTopics,
+    },
+  })
 }

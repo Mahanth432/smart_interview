@@ -6,7 +6,13 @@ import { usePathname, useRouter } from 'next/navigation'
 import Icon from '@/components/Icon'
 import { useTheme } from '@/components/providers/ThemeProvider'
 
-export default function AdminLayoutClient({ children }: { children: React.ReactNode }) {
+export default function AdminLayoutClient({
+  children,
+  username = 'System Admin',
+}: {
+  children: React.ReactNode
+  username?: string
+}) {
   const pathname = usePathname()
   const router = useRouter()
   const { isDark, toggleTheme } = useTheme()
@@ -158,11 +164,11 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
               fontWeight: 700,
               fontSize: '0.8rem',
             }}>
-              A
+              {username.charAt(0).toUpperCase()}
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', textAlign: 'left', lineHeight: 1.15 }}>
-              <span style={{ fontSize: '0.825rem', fontWeight: 600, color: 'var(--zentra-text-primary)' }}>System Admin</span>
-              <span style={{ fontSize: '0.7rem', color: 'var(--zentra-text-muted)' }}>Superuser</span>
+              <span style={{ fontSize: '0.825rem', fontWeight: 600, color: 'var(--zentra-text-primary)' }}>{username}</span>
+              <span style={{ fontSize: '0.7rem', color: 'var(--zentra-text-muted)' }}>Administrator</span>
             </div>
           </div>
 
@@ -192,9 +198,9 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
       </header>
 
       {/* Main Layout Area */}
-      <div style={{ display: 'flex', flex: 1 }}>
+      <div className="app-container" style={{ display: 'flex', flex: 1 }}>
         {/* Zentra Pill Sidebar */}
-        <aside style={{
+        <aside className="sidebar" style={{
           width: collapsed ? '76px' : '250px',
           backgroundColor: 'var(--zentra-bg-surface)',
           borderRight: '1px solid var(--zentra-border)',
@@ -203,7 +209,7 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
           transition: 'width 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
         }}>
           {/* Collapse Toggle */}
-          <div style={{
+          <div className="sidebar-toggle-btn" style={{
             padding: '1rem',
             display: 'flex',
             justifyContent: collapsed ? 'center' : 'flex-end',
@@ -211,6 +217,7 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
           }}>
             <button
               onClick={() => setCollapsed(!collapsed)}
+              aria-label="Toggle admin sidebar"
               style={{
                 background: 'var(--zentra-bg-muted)',
                 border: '1px solid var(--zentra-border)',
@@ -228,7 +235,7 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
             </button>
           </div>
 
-          <nav style={{ flex: 1, padding: '1rem 0.75rem', display: 'flex', flexDirection: 'column', gap: '0.35rem', overflowY: 'auto' }}>
+          <nav className="sidebar-nav admin-sidebar-nav" style={{ flex: 1, padding: '1rem 0.75rem', display: 'flex', flexDirection: 'column', gap: '0.35rem', overflowY: 'auto' }}>
             {navItems.map((item) => {
               const isActive = pathname === item.path
               return (
@@ -266,14 +273,14 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
                   }}
                 >
                   <Icon name={item.icon} size={19} />
-                  {!collapsed && <span>{item.name}</span>}
+                  {!collapsed && <span className="nav-text">{item.name}</span>}
                 </Link>
               )
             })}
           </nav>
 
           {!collapsed && (
-            <div style={{ padding: '0.85rem 1rem', borderTop: '1px solid var(--zentra-border-subtle)' }}>
+            <div className="sidebar-footer" style={{ padding: '0.85rem 1rem', borderTop: '1px solid var(--zentra-border-subtle)' }}>
               <div style={{
                 background: 'var(--zentra-bg-muted)',
                 border: '1px solid var(--zentra-border)',
@@ -294,7 +301,7 @@ export default function AdminLayoutClient({ children }: { children: React.ReactN
         </aside>
 
         {/* Main Content Area */}
-        <main style={{ flex: 1, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+        <main className="main-content" style={{ flex: 1, minWidth: 0, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
           <div style={{ flex: 1, overflowY: 'auto' }}>
             {children}
           </div>

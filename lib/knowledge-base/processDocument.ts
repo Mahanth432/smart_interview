@@ -4,6 +4,7 @@ import { DocumentObjectNotFoundError } from '@/lib/storage/b2'
 import { confirmAndMarkStorageMissing } from './storageReconciliation'
 import { extractTextFromFile } from './extractText'
 import { EMBEDDING_DIMENSIONS, generateEmbeddingsBatch } from './embeddings'
+import { getRagRuntimeSettings } from './ragConfig'
 
 export class DocumentStorageMissingError extends Error {
   constructor(message = 'Document file is missing from Backblaze B2 storage') {
@@ -14,17 +15,30 @@ export class DocumentStorageMissingError extends Error {
 
 const STALE_PROCESSING_MS = 3 * 60 * 1000
 
-// Split text into overlapping chunks
+// Split text into overlapping chunks respecting configured size/overlap and whitespace boundaries when possible
 export function splitIntoChunks(text: string, chunkSize = 1200, overlap = 200): string[] {
+  const safeSize = Math.max(200, Math.floor(chunkSize))
+  const safeOverlap = Math.max(0, Math.min(Math.floor(overlap), Math.floor(safeSize / 2)))
   const chunks: string[] = []
   let start = 0
   while (start < text.length) {
-    const end = Math.min(start + chunkSize, text.length)
-    chunks.push(text.slice(start, end).trim())
-    if (end === text.length) break
-    start += chunkSize - overlap
+    let end = Math.min(start + safeSize, text.length)
+    if (end < text.length) {
+      const slice = text.slice(start, end)
+      const lastBreak = Math.max(slice.lastIndexOf('\n'), slice.lastIndexOf('. '), slice.lastIndexOf(' '))
+      if (lastBreak > Math.floor(safeSize * 0.6)) {
+        end = start + lastBreak + 1
+      }
+    }
+    const piece = text.slice(start, end).trim()
+    if (piece.length > 0) {
+      chunks.push(piece)
+    }
+    if (end >= text.length) break
+    const nextStart = end - safeOverlap
+    start = nextStart > start ? nextStart : end
   }
-  return chunks.filter((c) => c.length > 0)
+  return chunks
 }
 
 export function sanitizeProcessingError(err: unknown): string {
@@ -145,9 +159,10 @@ export async function processDocument(
   }
 
   try {
-    // Phase 1: Extract text and split into overlapping chunks
+    // Phase 1: Extract text and split into overlapping chunks using admin-configured RAG chunking
+    const ragSettings = await getRagRuntimeSettings()
     const extracted = await extractFn(doc.storagePath, doc.originalFilename, doc.fileType)
-    const chunkTexts = splitIntoChunks(extracted)
+    const chunkTexts = splitIntoChunks(extracted, ragSettings.chunkSize, ragSettings.chunkOverlap)
 
     if (chunkTexts.length === 0) {
       throw new Error('Text splitting produced zero chunks')
@@ -176,18 +191,22 @@ export async function processDocument(
       return `[${vec.join(',')}]`
     })
     const chunkIndices = chunkTexts.map((_, idx) => idx)
+    const chunkSourceTypes = chunkTexts.map(() => doc.fileType || null)
+    const chunkTopics = chunkTexts.map(() => doc.subject || null)
 
     // Phase 3: Atomic non-interactive batch transaction (immune to P2028 on Neon pooler)
     await prisma.$transaction([
       prisma.documentChunk.deleteMany({ where: { documentId: id } }),
       prisma.$executeRaw`
-        INSERT INTO "DocumentChunk" ("documentId", "content", "chunkIndex", "createdAt", "embedding")
-        SELECT ${id}::int, u.content, u.chunk_index, NOW(), u.embedding::vector(384)
+        INSERT INTO "DocumentChunk" ("documentId", "content", "chunkIndex", "sourceType", "topic", "createdAt", "embedding")
+        SELECT ${id}::int, u.content, u.chunk_index, u.source_type, u.topic, NOW(), u.embedding::vector(384)
         FROM UNNEST(
           ${chunkTexts}::text[],
           ${chunkIndices}::int[],
+          ${chunkSourceTypes}::text[],
+          ${chunkTopics}::text[],
           ${vectorStrings}::text[]
-        ) AS u(content, chunk_index, embedding)
+        ) AS u(content, chunk_index, source_type, topic, embedding)
       `,
       prisma.document.update({
         where: { id },

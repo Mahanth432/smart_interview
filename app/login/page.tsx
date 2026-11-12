@@ -21,6 +21,8 @@ export default function LoginPage() {
   // Legacy passwordless account setup state
   const [requiresPasswordSetup, setRequiresPasswordSetup] = useState(false)
   const [legacyEmail, setLegacyEmail] = useState('')
+  const [setupOtp, setSetupOtp] = useState('')
+  const [setupOtpSent, setSetupOtpSent] = useState(false)
   const [newPassword, setNewPassword] = useState('')
   const [confirmNewPassword, setConfirmNewPassword] = useState('')
   const [showNewPassword, setShowNewPassword] = useState(false)
@@ -94,12 +96,43 @@ export default function LoginPage() {
     }
   }
 
-  // Handle Legacy Account Password Setup
+  // Request OTP for Legacy Password Setup
+  const handleRequestSetupOtp = async () => {
+    setError('')
+    setSuccessMsg('')
+    setIsLoading(true)
+    try {
+      const res = await fetch('/api/auth/set-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'request-otp',
+          email: legacyEmail,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to send verification code.')
+      }
+      setSetupOtpSent(true)
+      setSuccessMsg(data.message || 'Verification code sent to your email.')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to send verification code.')
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  // Handle Legacy Account Password Setup (OTP-verified)
   const handleSetupPassword = async (e: React.FormEvent) => {
     e.preventDefault()
     setError('')
     setSuccessMsg('')
 
+    if (!/^\d{6}$/.test(setupOtp.trim())) {
+      setError('Please enter the 6-digit verification code sent to your email.')
+      return
+    }
     if (!newPassword) {
       setError('Please enter a new password.')
       return
@@ -123,9 +156,10 @@ export default function LoginPage() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          action: 'confirm',
           email: legacyEmail,
+          otp: setupOtp.trim(),
           newPassword,
-          role: 'INTERVIEWER', // default fallback for legacy
         }),
       })
 
@@ -135,8 +169,10 @@ export default function LoginPage() {
       }
 
       setRequiresPasswordSetup(false)
+      setSetupOtp('')
+      setSetupOtpSent(false)
       setPassword(newPassword)
-      setSuccessMsg('Password configured! Please sign in using your new password.')
+      setSuccessMsg('Password verified & configured! Please sign in using your new password.')
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to setup password.')
     } finally {
@@ -205,11 +241,53 @@ export default function LoginPage() {
               <div className="auth-alert auth-alert-info" style={{ marginBottom: '1.25rem' }}>
                 <Icon name="info" size={16} style={{ flexShrink: 0, marginTop: '1px' }} />
                 <div>
-                  Your account (<strong style={{ wordBreak: 'break-all' }}>{legacyEmail}</strong>) does not have a password yet. Please create a password to continue.
+                  Your account (<strong style={{ wordBreak: 'break-all' }}>{legacyEmail}</strong>) requires OTP verification to set a password.
                 </div>
               </div>
 
+              <div style={{ marginBottom: '1rem' }}>
+                <button
+                  type="button"
+                  onClick={handleRequestSetupOtp}
+                  disabled={isLoading}
+                  className="auth-submit-btn"
+                  style={{
+                    background: 'var(--zentra-bg-muted, rgba(99, 102, 241, 0.12))',
+                    color: 'var(--color-text-primary)',
+                    border: '1px solid var(--zentra-border, rgba(99, 102, 241, 0.3))',
+                  }}
+                >
+                  {setupOtpSent ? 'Resend Verification Code' : 'Send 6-Digit Verification Code'}
+                </button>
+              </div>
+
               <form onSubmit={handleSetupPassword} style={{ display: 'flex', flexDirection: 'column', gap: '1.1rem' }}>
+                <div>
+                  <label
+                    htmlFor="legacy-setup-otp"
+                    style={{
+                      display: 'block',
+                      fontSize: '0.85rem',
+                      color: 'var(--color-text-secondary)',
+                      marginBottom: '0.45rem',
+                      fontWeight: 500,
+                    }}
+                  >
+                    6-Digit Verification Code
+                  </label>
+                  <input
+                    id="legacy-setup-otp"
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={6}
+                    className="auth-input"
+                    value={setupOtp}
+                    onChange={(e) => setSetupOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    placeholder="Enter 6-digit OTP"
+                    required
+                    disabled={isLoading}
+                  />
+                </div>
                 <div>
                   <label
                     htmlFor="legacy-new-pass"

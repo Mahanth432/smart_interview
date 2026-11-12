@@ -1,5 +1,6 @@
 import crypto from 'crypto'
 import prisma from '@/lib/db'
+import { getRequiredSessionSecret } from '@/lib/auth'
 import { GEMINI_MODEL, generateGeminiResponse } from './gemini'
 import { GROQ_MODEL, generateGroqResponse } from './groq'
 
@@ -51,7 +52,7 @@ export interface ResolvedRuntimeConfig {
 // Encryption Helpers (AES-256-GCM)
 // -----------------------------------------------------------------------------
 function getEncryptionKey(): Buffer {
-  const secret = process.env.SESSION_SECRET || 'smartinterview_default_secret_key_32_chars_min'
+  const secret = getRequiredSessionSecret('llm-api-key-encryption')
   return crypto.createHash('sha256').update(secret).digest()
 }
 

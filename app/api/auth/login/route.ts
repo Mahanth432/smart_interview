@@ -3,10 +3,13 @@ import bcrypt from 'bcryptjs'
 import prisma from '@/lib/db'
 import { establishUserSession } from '@/lib/auth-server'
 import { createAuditLog, extractRequestMetadata } from '@/lib/audit-log'
+import { verifySameOrigin } from '@/lib/csrf'
 import { checkRateLimit, extractClientIp, rateLimitResponse } from '@/lib/rate-limit'
 
 export async function POST(request: Request) {
   try {
+    const csrfError = verifySameOrigin(request)
+    if (csrfError) return csrfError
     if (!process.env.DATABASE_URL) {
       console.error('Missing DATABASE_URL environment variable')
       return NextResponse.json({ error: 'Server misconfiguration' }, { status: 500 })
@@ -73,16 +76,8 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 })
     }
 
-    // Legacy account without password: do not leak arbitrary stored email; echo setup flow safely
     if (!user.passwordHash) {
-      return NextResponse.json(
-        {
-          requiresPasswordSetup: true,
-          email: user.email || (trimmedInput.includes('@') ? normalizedInput : ''),
-          message: 'Your account requires OTP-verified password setup before signing in.',
-        },
-        { status: 403 }
-      )
+      return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 })
     }
 
     const isPasswordValid = await bcrypt.compare(String(password), user.passwordHash)

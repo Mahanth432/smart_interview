@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server'
 import prisma from '@/lib/db'
 import { getValidatedAppSession } from '@/lib/auth-server'
 
+export const maxDuration = 60
+
 export async function GET(request: Request) {
   try {
     const response = NextResponse.json({})

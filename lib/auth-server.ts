@@ -73,7 +73,7 @@ export async function getValidatedAppSession(
 
   const tokenMismatch =
     !dbUser ||
-    (typeof session.tokenVersion === 'number' && session.tokenVersion !== dbUser.tokenVersion) ||
+    session.tokenVersion !== dbUser.tokenVersion ||
     session.role !== dbUser.role ||
     (dbUser.role !== 'ADMIN' && !dbUser.emailVerified)
 

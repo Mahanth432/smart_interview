@@ -128,21 +128,21 @@ export async function searchChunks(
   const queryEmbedding = await generateEmbedding(query)
   const vectorStr = `[${queryEmbedding.join(',')}]`
 
-  const results = await prisma.$queryRaw<
-    Array<{
-      chunk_id: number
-      document_id: number
-      document_name: string
-      original_filename: string
-      chunk_index: number
-      content: string
-      page_number: number | null
-      source_type: string | null
-      topic: string | null
-      unit: string | null
-      distance: number
-    }>
-  >`
+  type ChunkRow = {
+    chunk_id: number
+    document_id: number
+    document_name: string
+    original_filename: string
+    chunk_index: number
+    content: string
+    page_number: number | null
+    source_type: string | null
+    topic: string | null
+    unit: string | null
+    distance: number
+  }
+
+  const runVectorQuery = (client: Pick<typeof prisma, '$queryRaw'>) => client.$queryRaw<ChunkRow[]>`
     SELECT
       dc."id"                AS chunk_id,
       dc."documentId"        AS document_id,
@@ -165,6 +165,14 @@ export async function searchChunks(
     ORDER BY dc."embedding" <=> ${vectorStr}::vector ASC
     LIMIT ${safeLimit}
   `
+
+  const results =
+    typeof prisma.$transaction === 'function'
+      ? await prisma.$transaction(async (tx) => {
+          await tx.$executeRaw`SET LOCAL hnsw.ef_search = 100`
+          return runVectorQuery(tx)
+        })
+      : await runVectorQuery(prisma)
 
   return results
     .map((row) => ({

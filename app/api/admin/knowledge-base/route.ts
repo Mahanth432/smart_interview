@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server'
-import { getAppSession } from '@/lib/auth'
+import { getValidatedAppSession } from '@/lib/auth-server'
+import { verifySameOrigin } from '@/lib/csrf'
+import { enforceRateLimit } from '@/lib/rate-limit'
 import prisma from '@/lib/db'
 import {
   handleDocumentUpload,
@@ -17,7 +19,7 @@ export const maxDuration = 60
 export async function GET(request: Request) {
   try {
     const response = NextResponse.json({})
-    const session = await getAppSession(request, response)
+    const session = await getValidatedAppSession(request, response)
 
     if (!session?.isLoggedIn || !session.userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -89,8 +91,10 @@ export async function GET(request: Request) {
 // POST /api/admin/knowledge-base — upload document as ADMIN_MASTER
 export async function POST(request: Request) {
   try {
+    const csrfError = verifySameOrigin(request)
+    if (csrfError) return csrfError
     const response = NextResponse.json({})
-    const session = await getAppSession(request, response)
+    const session = await getValidatedAppSession(request, response)
 
     if (!session?.isLoggedIn || !session.userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -98,6 +102,16 @@ export async function POST(request: Request) {
     if (session.role !== 'ADMIN') {
       return NextResponse.json({ error: 'Forbidden — Admin only' }, { status: 403 })
     }
+
+    const rlError = await enforceRateLimit(
+      {
+        key: `admin:kb-write:user:${session.userId}`,
+        limit: 30,
+        windowSeconds: 15 * 60,
+      },
+      'Too many knowledge base upload requests. Please wait before trying again.'
+    )
+    if (rlError) return rlError
 
     return await handleDocumentUpload({
       request,

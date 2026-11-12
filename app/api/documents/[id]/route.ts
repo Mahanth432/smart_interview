@@ -1,6 +1,8 @@
 import { NextResponse, NextRequest } from 'next/server'
 
-import { getAppSession } from '@/lib/auth'
+import { getValidatedAppSession } from '@/lib/auth-server'
+import { verifySameOrigin } from '@/lib/csrf'
+import { enforceRateLimit } from '@/lib/rate-limit'
 import prisma from '@/lib/db'
 import { buildDocumentDownloadResponse } from '@/lib/knowledge-base/documentHandlers'
 import { deleteDocumentObject } from '@/lib/storage/b2'
@@ -12,7 +14,7 @@ export async function GET(
 ) {
   try {
     const response = NextResponse.json({})
-    const session = await getAppSession(request, response)
+    const session = await getValidatedAppSession(request, response)
 
     if (!session?.isLoggedIn || !session.userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -52,8 +54,10 @@ export async function DELETE(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
+    const csrfError = verifySameOrigin(request)
+    if (csrfError) return csrfError
     const response = NextResponse.json({})
-    const session = await getAppSession(request, response)
+    const session = await getValidatedAppSession(request, response)
 
     if (!session?.isLoggedIn || !session.userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -84,6 +88,16 @@ export async function DELETE(
     }
 
     // Cascade deletes DocumentChunk rows automatically (onDelete: Cascade)
+    const rlError = await enforceRateLimit(
+      {
+        key: `documents:item:user:${session.userId}`,
+        limit: 40,
+        windowSeconds: 15 * 60,
+      },
+      'Too many document delete requests. Please wait before trying again.'
+    )
+    if (rlError) return rlError
+
     await prisma.document.delete({ where: { id } })
 
     // Only delete underlying B2 object for private docs when no other Document rows reference the same key

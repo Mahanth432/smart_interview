@@ -1,5 +1,7 @@
 import { NextResponse, NextRequest } from 'next/server'
-import { getAppSession } from '@/lib/auth'
+import { getValidatedAppSession } from '@/lib/auth-server'
+import { verifySameOrigin } from '@/lib/csrf'
+import { enforceRateLimit } from '@/lib/rate-limit'
 import { retryDocumentProcessing } from '@/lib/knowledge-base/documentHandlers'
 
 export const maxDuration = 60
@@ -13,8 +15,10 @@ export async function POST(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
+    const csrfError = verifySameOrigin(request)
+    if (csrfError) return csrfError
     const response = NextResponse.json({})
-    const session = await getAppSession(request, response)
+    const session = await getValidatedAppSession(request, response)
 
     if (!session?.isLoggedIn || !session.userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -22,6 +26,16 @@ export async function POST(
     if (session.role !== 'ADMIN') {
       return NextResponse.json({ error: 'Forbidden — Admin only' }, { status: 403 })
     }
+
+    const rlError = await enforceRateLimit(
+      {
+        key: `admin:kb-process:user:${session.userId}`,
+        limit: 15,
+        windowSeconds: 15 * 60,
+      },
+      'Too many document processing requests. Please wait before trying again.'
+    )
+    if (rlError) return rlError
 
     const { id: idStr } = await context.params
     const id = parseInt(idStr, 10)

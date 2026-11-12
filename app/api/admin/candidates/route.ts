@@ -13,7 +13,7 @@ export async function GET(request: Request) {
       return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 })
     }
 
-    if (session.role !== 'ADMIN' && session.role !== 'INTERVIEWER') {
+    if (session.role !== 'ADMIN') {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
     }
 

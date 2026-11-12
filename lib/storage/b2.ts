@@ -354,6 +354,7 @@ export async function createPresignedDocumentUpload(params: {
   userId?: number
   originalFilename: string
   contentType: string
+  contentLength?: number
   expiresInSeconds?: number
 }): Promise<{
   uploadUrl: string
@@ -391,6 +392,9 @@ export async function createPresignedDocumentUpload(params: {
     Bucket: config.bucketName,
     Key: storagePath,
     ContentType: contentType,
+    ...(typeof params.contentLength === 'number' && params.contentLength > 0
+      ? { ContentLength: Math.floor(params.contentLength) }
+      : {}),
   })
 
   const uploadUrl = await getSignedUrl(client, command, { expiresIn })

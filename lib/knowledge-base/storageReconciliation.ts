@@ -234,8 +234,9 @@ async function runReconcileStorage(
     }
 
     const headEtagNorm = normalizeEtag(authoritativeEtag)
+    const userScopedFilter = scope.kind === 'user' ? { userId: scope.userId } : {}
     const allSharingRows = await prisma.document.findMany({
-      where: { storagePath: params.storagePath },
+      where: { storagePath: params.storagePath, ...userScopedFilter },
       select: {
         id: true,
         docSource: true,
@@ -354,8 +355,9 @@ async function runReconcileStorage(
 
     if (!head.exists) {
       // Definitive 404 / NoSuchKey / ENOENT -> mark AVAILABLE rows sharing this storagePath as MISSING
+      const userScopedFilter = scope.kind === 'user' ? { userId: scope.userId } : {}
       const affected = await prisma.document.findMany({
-        where: { storagePath, storageStatus: 'AVAILABLE' },
+        where: { storagePath, storageStatus: 'AVAILABLE', ...userScopedFilter },
         select: { id: true, docSource: true, status: true },
       })
 

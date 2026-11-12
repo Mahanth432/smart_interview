@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/db'
 import { sendOtpEmail } from '@/lib/mail'
 import { createAuditLog } from '@/lib/audit-log'
+import { verifySameOrigin } from '@/lib/csrf'
 import { checkEmailOtpQuota, issueOtpForEmail, type OtpPurpose } from '@/lib/otp-store'
 import { checkRateLimit, extractClientIp, rateLimitResponse } from '@/lib/rate-limit'
 
@@ -13,6 +14,9 @@ function resolvePurpose(raw: unknown): OtpPurpose {
 
 export async function POST(req: NextRequest) {
   try {
+    const csrfError = verifySameOrigin(req)
+    if (csrfError) return csrfError
+
     const clientIp = extractClientIp(req)
     const ipLimit = await checkRateLimit({
       key: `request-otp:ip:${clientIp}`,

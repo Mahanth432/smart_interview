@@ -2,10 +2,11 @@ import { NextRequest, NextResponse } from 'next/server'
 import { Prisma } from '@prisma/client'
 import prisma from '@/lib/db'
 import { generateLLMResponse } from '@/lib/llm'
-import { QUESTION_GENERATOR_PROMPT } from '@/lib/llm/prompts'
+import { QUESTION_GENERATOR_PROMPT, renderPromptTemplate, sanitizeUntrustedText } from '@/lib/llm/prompts'
 import { formatRagContextWithCitations, searchChunks } from '@/lib/knowledge-base/searchChunks'
 import { createAuditLog } from '@/lib/audit-log'
 import { getValidatedAppSession } from '@/lib/auth-server'
+import { verifySameOrigin } from '@/lib/csrf'
 import { normalizeDifficulty } from '@/lib/interview/difficulty'
 import { buildAnonymizedMemoryContext } from '@/lib/interview/memory'
 import { checkRateLimit, rateLimitResponse } from '@/lib/rate-limit'
@@ -14,6 +15,9 @@ export const maxDuration = 60
 
 export async function POST(req: NextRequest) {
   try {
+    const csrfError = verifySameOrigin(req)
+    if (csrfError) return csrfError
+
     const res = NextResponse.json({})
     const ironSession = await getValidatedAppSession(req, res)
     const userId = ironSession?.isLoggedIn ? ironSession.userId ?? null : null
@@ -184,38 +188,6 @@ export async function POST(req: NextRequest) {
         ? forceProvider
         : undefined
 
-    const session = await prisma.interviewSession.create({
-      data: {
-        candidateId: candidate.id,
-        interviewerId: userId,
-        status: 'active',
-        difficulty: sessionDifficulty,
-        interviewType: 'Adaptive',
-        scope: {
-          subject,
-          subjects: multiSubjectsList,
-          mode: mode || 'standard',
-          setupData: setupData || '',
-          selectedDocumentIds: selectedDocIds || null,
-        },
-      },
-    })
-
-    createAuditLog({
-      userId,
-      username,
-      action: 'INTERVIEW_CREATED',
-      entityType: 'InterviewSession',
-      entityId: session.id,
-      metadata: {
-        candidateName: candidate.name,
-        subject,
-        difficulty: sessionDifficulty,
-        mode: mode || 'standard',
-        selectedDocumentIds: selectedDocIds,
-      },
-    })
-
     let contextText = ''
     let topicToStart = 'Fundamentals'
     let sourceReferences: ReturnType<typeof formatRagContextWithCitations>['sources'] = []
@@ -264,27 +236,28 @@ export async function POST(req: NextRequest) {
       contextText = formatted.contextText
     }
 
-    const generatorPrompt = QUESTION_GENERATOR_PROMPT
-      .replace('{{subject}}', subject)
-      .replace('{{multi_subjects}}', multiSubjectsList.join(', ') || subject)
-      .replace('{{topic}}', topicToStart)
-      .replace('{{difficulty}}', sessionDifficulty)
-      .replace('{{context}}', contextText)
-      .replace('{{candidate_memory_context}}', memoryContext)
-      .replace('{{previous_question}}', 'None - Starting Interview')
-      .replace('{{candidate_answer}}', 'None - Starting Interview')
-      .replace('{{evaluation_summary}}', 'None - Initial Question Generation')
-      .replace('{{previous_questions}}', 'None')
-      .replace('{{earlier_context}}', 'None - Interview Just Started')
-      .replace('{{weak_concepts}}', 'None')
-      .replace('{{remaining_concepts}}', 'All')
+    const generatorPrompt = renderPromptTemplate(QUESTION_GENERATOR_PROMPT, {
+      '{{subject}}': subject,
+      '{{multi_subjects}}': multiSubjectsList.join(', ') || subject,
+      '{{topic}}': topicToStart,
+      '{{difficulty}}': sessionDifficulty,
+      '{{context}}': sanitizeUntrustedText(contextText, 6000),
+      '{{candidate_memory_context}}': memoryContext,
+      '{{previous_question}}': 'None - Starting Interview',
+      '{{candidate_answer}}': 'None - Starting Interview',
+      '{{evaluation_summary}}': 'None - Initial Question Generation',
+      '{{previous_questions}}': 'None',
+      '{{earlier_context}}': 'None - Interview Just Started',
+      '{{weak_concepts}}': 'None',
+      '{{remaining_concepts}}': 'All',
+    })
 
     const { text: nextQResponse } = await generateLLMResponse(
       generatorPrompt + '\n\nReply in strict JSON format.',
       adminForcedProvider
     )
 
-    let nextQJson
+    let nextQJson: Record<string, unknown> | null = null
     try {
       nextQJson = JSON.parse(nextQResponse)
     } catch {
@@ -292,36 +265,80 @@ export async function POST(req: NextRequest) {
       try {
         nextQJson = JSON.parse(cleaned)
       } catch {
-        nextQJson = {
-          suggestions: [
-            {
-              question: 'What is an algorithm?',
-              type: 'Conceptual',
-              difficulty: sessionDifficulty,
-              topic: 'Basics',
-            },
-          ],
-        }
+        return NextResponse.json(
+          { error: 'AI provider returned an invalid question payload. Please try starting again.' },
+          { status: 502 }
+        )
       }
     }
 
-    const suggestion = nextQJson.suggestions?.[0] || nextQJson
+    const suggestionsArr = Array.isArray(nextQJson?.suggestions)
+      ? (nextQJson.suggestions as Array<Record<string, unknown>>)
+      : []
+    const suggestion = suggestionsArr[0] || nextQJson
+    const generatedQuestionText =
+      typeof suggestion?.question === 'string' ? suggestion.question.trim() : ''
 
-    const firstQuestion = await prisma.question.create({
-      data: {
-        sessionId: session.id,
-        questionNumber: 1,
-        content: suggestion.question || 'What is an algorithm?',
-        type: suggestion.type || 'Conceptual',
-        difficulty: normalizeDifficulty(suggestion.difficulty, sessionDifficulty),
-        topic: suggestion.topic || 'Fundamentals',
-        expectedAnswer: suggestion.expected_answer || '',
-        coreConcepts: suggestion.concepts || [],
-        requiredKeywords: suggestion.required_keywords || [],
-        sourceReferences:
-          sourceReferences.length > 0
-            ? (sourceReferences as unknown as Prisma.InputJsonValue)
-            : undefined,
+    if (!generatedQuestionText) {
+      return NextResponse.json(
+        { error: 'AI provider failed to generate an opening question. Please try again.' },
+        { status: 502 }
+      )
+    }
+
+    const { session, firstQuestion } = await prisma.$transaction(async (tx) => {
+      const createdSession = await tx.interviewSession.create({
+        data: {
+          candidateId: candidate.id,
+          interviewerId: userId,
+          status: 'active',
+          difficulty: sessionDifficulty,
+          interviewType: 'Adaptive',
+          scope: {
+            subject,
+            subjects: multiSubjectsList,
+            mode: mode || 'standard',
+            setupData: setupData || '',
+            selectedDocumentIds: selectedDocIds || null,
+          },
+        },
+      })
+
+      const createdQuestion = await tx.question.create({
+        data: {
+          sessionId: createdSession.id,
+          questionNumber: 1,
+          content: generatedQuestionText,
+          type: typeof suggestion?.type === 'string' && suggestion.type ? suggestion.type : 'Conceptual',
+          difficulty: normalizeDifficulty(suggestion?.difficulty as string | undefined, sessionDifficulty),
+          topic: typeof suggestion?.topic === 'string' && suggestion.topic ? suggestion.topic : 'Fundamentals',
+          expectedAnswer: typeof suggestion?.expected_answer === 'string' ? suggestion.expected_answer : '',
+          coreConcepts: Array.isArray(suggestion?.concepts) ? suggestion.concepts.map(String) : [],
+          requiredKeywords: Array.isArray(suggestion?.required_keywords)
+            ? suggestion.required_keywords.map(String)
+            : [],
+          sourceReferences:
+            sourceReferences.length > 0
+              ? (sourceReferences as unknown as Prisma.InputJsonValue)
+              : undefined,
+        },
+      })
+
+      return { session: createdSession, firstQuestion: createdQuestion }
+    })
+
+    createAuditLog({
+      userId,
+      username,
+      action: 'INTERVIEW_CREATED',
+      entityType: 'InterviewSession',
+      entityId: session.id,
+      metadata: {
+        candidateName: candidate.name,
+        subject,
+        difficulty: sessionDifficulty,
+        mode: mode || 'standard',
+        selectedDocumentIds: selectedDocIds,
       },
     })
 

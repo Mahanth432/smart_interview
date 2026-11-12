@@ -56,11 +56,11 @@ export function verifySameOrigin(request: Request): NextResponse | null {
     }
   }
 
-  // Reject cross-site Sec-Fetch-Site when browser sends fetch metadata without Origin/Referer
+  // If both Origin and Referer are absent, allow ONLY when browser explicitly sends Sec-Fetch-Site: same-origin
   const fetchSite = request.headers.get('sec-fetch-site')?.toLowerCase()
-  if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'same-site' && fetchSite !== 'none') {
-    return NextResponse.json({ error: 'Cross-site request rejected' }, { status: 403 })
+  if (fetchSite === 'same-origin') {
+    return null
   }
 
-  return null
+  return NextResponse.json({ error: 'Origin or Referer verification required' }, { status: 403 })
 }

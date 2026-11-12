@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/db'
 import { getValidatedAppSession } from '@/lib/auth-server'
+import { verifySameOrigin } from '@/lib/csrf'
 import { createAuditLog } from '@/lib/audit-log'
+import { enforceRateLimit } from '@/lib/rate-limit'
 
 function normalizeLines(raw: unknown): string[] | undefined {
   if (!Array.isArray(raw)) return undefined
@@ -18,6 +20,8 @@ export async function PATCH(
   context: { params: Promise<{ sessionId: string }> }
 ) {
   try {
+    const csrfError = verifySameOrigin(req)
+    if (csrfError) return csrfError
     const res = NextResponse.json({})
     const userSession = await getValidatedAppSession(req, res)
     if (!userSession?.isLoggedIn || !userSession.userId) {
@@ -26,6 +30,16 @@ export async function PATCH(
     if (userSession.role === 'CANDIDATE') {
       return NextResponse.json({ error: 'Forbidden: candidates cannot edit reports' }, { status: 403 })
     }
+
+    const rlError = await enforceRateLimit(
+      {
+        key: `interview:report-edit:user:${userSession.userId}`,
+        limit: 40,
+        windowSeconds: 15 * 60,
+      },
+      'Too many report edit requests. Please wait before trying again.'
+    )
+    if (rlError) return rlError
 
     const { sessionId } = await context.params
     const session = await prisma.interviewSession.findUnique({

@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 import prisma from '@/lib/db'
 import { getValidatedAppSession } from '@/lib/auth-server'
+import { verifySameOrigin } from '@/lib/csrf'
+import { enforceRateLimit } from '@/lib/rate-limit'
 import {
   getCandidateLearningSnapshot,
   refreshRevisionRecommendations,
@@ -45,6 +47,8 @@ export async function GET(request: Request) {
 
 export async function PATCH(request: Request) {
   try {
+    const csrfError = verifySameOrigin(request)
+    if (csrfError) return csrfError
     const response = NextResponse.json({})
     const session = await getValidatedAppSession(request, response)
 
@@ -54,6 +58,16 @@ export async function PATCH(request: Request) {
     if (session.role !== 'CANDIDATE') {
       return NextResponse.json({ error: 'Forbidden: Candidates only' }, { status: 403 })
     }
+
+    const rlError = await enforceRateLimit(
+      {
+        key: `candidate:memory:user:${session.userId}`,
+        limit: 20,
+        windowSeconds: 15 * 60,
+      },
+      'Too many learning memory refresh requests. Please wait before trying again.'
+    )
+    if (rlError) return rlError
 
     const candidate = await prisma.candidate.findUnique({
       where: { userId: session.userId },

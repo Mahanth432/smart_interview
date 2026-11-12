@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server'
 import { getValidatedAppSession } from '@/lib/auth-server'
-import prisma from '@/lib/db'
+import { Prisma } from '@prisma/client'
+import prisma, { withDbRetry } from '@/lib/db'
 import { formatInterviewerName } from '@/lib/formatters'
+
+export const maxDuration = 60
 
 export async function GET(request: Request) {
   try {
@@ -33,9 +36,9 @@ export async function GET(request: Request) {
       statusGroups,
       typeGroups,
       difficultyGroups,
-      recentSessions,
+      dailySessionCounts,
       interviewers
-    ] = await Promise.all([
+    ] = await withDbRetry(() => Promise.all([
       prisma.interviewSession.count(),
       prisma.interviewSession.count({ where: { status: 'completed' } }),
       prisma.interviewSession.count({ where: { status: 'active' } }),
@@ -60,17 +63,15 @@ export async function GET(request: Request) {
         by: ['difficulty'],
         _count: { id: true },
       }),
-      prisma.interviewSession.findMany({
-        where: {
-          startedAt: {
-            gte: thirtyDaysAgo,
-          },
-        },
-        select: {
-          startedAt: true,
-          status: true,
-        },
-      }),
+      prisma.$queryRaw<Array<{ day: string; total: bigint; completed: bigint }>>`
+        SELECT
+          TO_CHAR("startedAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day,
+          COUNT(*)::bigint AS total,
+          COUNT(*) FILTER (WHERE status = 'completed')::bigint AS completed
+        FROM "InterviewSession"
+        WHERE "startedAt" >= ${thirtyDaysAgo}
+        GROUP BY 1
+      `,
       prisma.user.findMany({
         where: { role: 'INTERVIEWER' },
         select: {
@@ -82,18 +83,28 @@ export async function GET(request: Request) {
           _count: {
             select: { sessions: true },
           },
-          sessions: {
-            select: {
-              id: true,
-              status: true,
-              score: true,
-            },
-          },
         },
         orderBy: { createdAt: 'desc' },
         take: 20,
       }),
-    ])
+    ]))
+
+    const interviewerIds = interviewers.map((u) => u.id)
+    const interviewerMetrics =
+      interviewerIds.length > 0
+        ? await withDbRetry(() =>
+            prisma.$queryRaw<Array<{ interviewerId: number; completedCount: bigint; avgScore: number | null }>>`
+              SELECT
+                "interviewerId",
+                COUNT(*) FILTER (WHERE status = 'completed')::bigint AS "completedCount",
+                AVG(score) FILTER (WHERE score IS NOT NULL)::float8 AS "avgScore"
+              FROM "InterviewSession"
+              WHERE "interviewerId" IN (${Prisma.join(interviewerIds)})
+              GROUP BY "interviewerId"
+            `
+          )
+        : []
+    const metricsByInterviewer = new Map(interviewerMetrics.map((m) => [m.interviewerId, m]))
 
     // Completion Rate calculation
     const completionRate = totalInterviews > 0
@@ -148,13 +159,10 @@ export async function GET(request: Request) {
       activityMap[dateStr] = { total: 0, completed: 0 }
     }
 
-    recentSessions.forEach((s) => {
-      const dateStr = s.startedAt.toISOString().split('T')[0]
-      if (activityMap[dateStr]) {
-        activityMap[dateStr].total += 1
-        if (s.status === 'completed') {
-          activityMap[dateStr].completed += 1
-        }
+    dailySessionCounts.forEach((row) => {
+      if (activityMap[row.day]) {
+        activityMap[row.day].total = Number(row.total)
+        activityMap[row.day].completed = Number(row.completed)
       }
     })
 
@@ -169,11 +177,12 @@ export async function GET(request: Request) {
     // Interviewer activity calculation
     const interviewerPerformance = interviewers.map((user) => {
       const totalSess = user._count.sessions
-      const compSess = user.sessions.filter((s) => s.status === 'completed').length
-      const scoredSess = user.sessions.filter((s) => s.score !== null)
-      const avgSc = scoredSess.length > 0
-        ? Math.round((scoredSess.reduce((acc, curr) => acc + (curr.score || 0), 0) / scoredSess.length) * 10) / 10
-        : null
+      const metric = metricsByInterviewer.get(user.id)
+      const compSess = metric ? Number(metric.completedCount) : 0
+      const avgSc =
+        metric && metric.avgScore !== null
+          ? Math.round(metric.avgScore * 10) / 10
+          : null
 
       return {
         id: user.id,

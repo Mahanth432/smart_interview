@@ -209,7 +209,7 @@ async function main() {
 
       const req = new Request('http://localhost:3000/api/auth/set-password', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Origin: 'http://localhost:3000' },
         body: JSON.stringify({ email: 'victim@example.com', newPassword: 'AttackerPassword1!' }),
       })
       const res = await setPasswordPost(req)
@@ -229,7 +229,7 @@ async function main() {
 
       const req = new Request('http://localhost:3000/api/auth/set-password', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', Origin: 'http://localhost:3000' },
         body: JSON.stringify({ action: 'request-otp', email: 'nonexistent@example.com' }),
       })
       const res = await setPasswordPost(req)
@@ -240,7 +240,16 @@ async function main() {
 
     // 3E. GET /api/admin/settings filters strictly to ALLOWED_KEYS
     await check('GET /api/admin/settings queries with ALLOWED_KEYS whitelist only', async () => {
-      // Stub getAppSession cleanly for this check by verifying query filter via mock
+      // Stub getValidatedAppSession DB lookup + ALLOWED_KEYS query filter
+      const origUserFindUnique = prisma.user.findUnique
+      prisma.user.findUnique = (async () => ({
+        id: 1,
+        username: 'admin',
+        role: 'ADMIN',
+        tokenVersion: 1,
+        emailVerified: true,
+      })) as unknown as typeof prisma.user.findUnique
+
       let capturedWhere: unknown = null
       prisma.appSettings.findMany = (async (args?: { where?: unknown }) => {
         capturedWhere = args?.where ?? null
@@ -257,6 +266,7 @@ async function main() {
       s.userId = 1
       s.username = 'admin'
       s.role = 'ADMIN'
+      s.tokenVersion = 1
       s.expiresAt = Date.now() + 3600_000
       await s.save()
       const cookie = (seedRes.headers.get('set-cookie') || '').split(';')[0]
@@ -264,7 +274,12 @@ async function main() {
       const req = new Request('http://localhost:3000/api/admin/settings', {
         headers: { cookie },
       })
-      const res = await getAdminSettings(req)
+      let res: Response
+      try {
+        res = await getAdminSettings(req)
+      } finally {
+        prisma.user.findUnique = origUserFindUnique
+      }
       assert.equal(res.status, 200)
       assert.ok(capturedWhere && typeof capturedWhere === 'object' && 'key' in capturedWhere)
       const inKeys = (capturedWhere as { key: { in: string[] } }).key.in
@@ -403,7 +418,7 @@ async function main() {
       const intCookie = await makeSessionCookie(77, 'INTERVIEWER', 1)
       const req = new NextRequest('http://localhost:3000/api/interview/start', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', cookie: intCookie },
+        headers: { 'Content-Type': 'application/json', origin: 'http://localhost:3000', cookie: intCookie },
         body: JSON.stringify({ candidateId: 'cand-other', difficulty: 'hard' }),
       })
       const res = await startPost(req)
@@ -436,7 +451,7 @@ async function main() {
       const intCookie = await makeSessionCookie(77, 'INTERVIEWER', 1)
       const req = new NextRequest('http://localhost:3000/api/interview/end', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', cookie: intCookie },
+        headers: { 'Content-Type': 'application/json', origin: 'http://localhost:3000', cookie: intCookie },
         body: JSON.stringify({ sessionId: 'sess-done' }),
       })
       const res = await endPost(req)

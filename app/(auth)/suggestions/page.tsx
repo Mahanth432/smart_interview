@@ -1,10 +1,10 @@
 import React from 'react'
 import prisma from '@/lib/db'
-import { getAppSession } from '@/lib/auth'
+import { getValidatedAppSession } from '@/lib/auth-server'
 import Icon from '@/components/Icon'
 
 export default async function SuggestionsPage() {
-  const session = await getAppSession()
+  const session = await getValidatedAppSession()
   const userId = session.userId
 
   if (!userId) {

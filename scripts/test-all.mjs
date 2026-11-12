@@ -7,6 +7,7 @@ const SUITES = [
   'scripts/test-p1-kb-rag-lifecycle.ts',
   'scripts/test-p2-memory-and-reports.ts',
   'scripts/test-p4-rag-validation-and-db.ts',
+  'scripts/test-audit-remediation.ts',
 ]
 
 for (const suite of SUITES) {

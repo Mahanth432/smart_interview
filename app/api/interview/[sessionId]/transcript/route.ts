@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getAppSession } from "@/lib/auth";
+import { getValidatedAppSession } from "@/lib/auth-server";
 import prisma from "@/lib/db";
+import { sanitizeReportForRole } from "@/lib/report-privacy";
 
 import { formatInterviewerName } from "@/lib/formatters";
 
@@ -10,7 +11,7 @@ export async function GET(
 ) {
   try {
     const res = NextResponse.json({});
-    const userSession = await getAppSession(req as unknown as Request, res as unknown as Response);
+    const userSession = await getValidatedAppSession(req as unknown as Request, res as unknown as Response);
 
     if (!userSession?.isLoggedIn || !userSession?.userId) {
       return NextResponse.json({ error: "Unauthenticated" }, { status: 401 });
@@ -68,6 +69,13 @@ export async function GET(
       );
     }
 
+    if (userSession.role === "CANDIDATE" && session.status !== "completed") {
+      return NextResponse.json(
+        { error: "Transcript is available only after the interview is completed." },
+        { status: 403 }
+      );
+    }
+
     const questions = session.questions.map((q) => ({
       questionId: q.id,
       questionNumber: q.questionNumber,
@@ -110,7 +118,7 @@ export async function GET(
         id: session.interviewer?.id || null,
         username: formatInterviewerName(session.interviewer),
       },
-      report: session.report,
+      report: sanitizeReportForRole(session.report, userSession.role),
       questions,
     });
   } catch (err: unknown) {

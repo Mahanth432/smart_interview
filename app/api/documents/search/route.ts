@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getValidatedAppSession } from '@/lib/auth-server'
+import { verifySameOrigin } from '@/lib/csrf'
+import { checkRateLimit, rateLimitResponse } from '@/lib/rate-limit'
 import { searchChunks } from '@/lib/knowledge-base/searchChunks'
 
 export const maxDuration = 60
@@ -11,6 +13,9 @@ export const maxDuration = 60
  */
 export async function POST(request: Request) {
   try {
+    const csrfError = verifySameOrigin(request)
+    if (csrfError) return csrfError
+
     const response = NextResponse.json({})
     const session = await getValidatedAppSession(request, response)
 
@@ -19,6 +24,15 @@ export async function POST(request: Request) {
     }
     if (session.role === 'CANDIDATE') {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+    }
+
+    const rateLimit = await checkRateLimit({
+      key: `documents:search:user:${session.userId}`,
+      limit: 60,
+      windowSeconds: 15 * 60,
+    })
+    if (!rateLimit.allowed) {
+      return rateLimitResponse(rateLimit.retryAfterSeconds, 'Too many document search requests.')
     }
 
     const body = await request.json()

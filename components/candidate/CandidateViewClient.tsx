@@ -140,23 +140,32 @@ export function CandidateViewClient({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ revisionId, status }),
       })
-      if (res.ok) {
-        loadMemory()
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        window.alert(d.error || 'Failed to update revision item.')
+        return
       }
+      await loadMemory()
     } catch {
-      // ignore
+      window.alert('Network error while updating revision item.')
     }
   }
 
   const handleRefreshRevisions = async () => {
     setLoadingMemory(true)
     try {
-      await fetch('/api/candidate/memory', {
+      const res = await fetch('/api/candidate/memory', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'refresh' }),
       })
+      if (!res.ok) {
+        const d = await res.json().catch(() => ({}))
+        window.alert(d.error || 'Failed to refresh revision recommendations.')
+      }
       await loadMemory()
+    } catch {
+      window.alert('Network error while refreshing revision recommendations.')
     } finally {
       setLoadingMemory(false)
     }
@@ -212,7 +221,7 @@ export function CandidateViewClient({
           <a
             href="/candidate"
             role="tab"
-            aria-selected={activeTab !== 'performance'}
+            aria-selected={activeTab === 'results'}
             onClick={(e) => handleTabClick('results', e)}
             style={{
               padding: '0.45rem 1.15rem',
@@ -222,9 +231,9 @@ export function CandidateViewClient({
               textDecoration: 'none',
               cursor: 'pointer',
               transition: 'all 0.2s ease',
-              background: activeTab !== 'performance' ? 'var(--zentra-pill-active-bg)' : 'transparent',
-              color: activeTab !== 'performance' ? 'var(--zentra-pill-active-text)' : 'var(--zentra-pill-inactive-text)',
-              boxShadow: activeTab !== 'performance' ? '0 2px 8px rgba(0,0,0,0.08)' : 'none',
+              background: activeTab === 'results' ? 'var(--zentra-pill-active-bg)' : 'transparent',
+              color: activeTab === 'results' ? 'var(--zentra-pill-active-text)' : 'var(--zentra-pill-inactive-text)',
+              boxShadow: activeTab === 'results' ? '0 2px 8px rgba(0,0,0,0.08)' : 'none',
             }}
           >
             My Results
@@ -499,7 +508,7 @@ export function CandidateViewClient({
                     Average Score
                   </div>
                   <div style={{ fontSize: '2.25rem', fontWeight: 700, color: '#10b981', marginTop: '0.35rem' }}>
-                    {avgScore}%
+                    {avgScore !== null ? `${avgScore}%` : '—'}
                   </div>
                   <div style={{ fontSize: '0.8rem', color: 'var(--zentra-text-secondary)', marginTop: '0.35rem' }}>
                     Across {completedInterviews} completed evaluation(s)
@@ -511,7 +520,7 @@ export function CandidateViewClient({
                     Peak Evaluation
                   </div>
                   <div style={{ fontSize: '2.25rem', fontWeight: 700, color: '#2563eb', marginTop: '0.35rem' }}>
-                    {bestScore}%
+                    {bestScore !== null ? `${bestScore}%` : '—'}
                   </div>
                   <div style={{ fontSize: '0.8rem', color: 'var(--zentra-text-secondary)', marginTop: '0.35rem' }}>
                     Your highest score recorded

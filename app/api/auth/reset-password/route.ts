@@ -2,12 +2,16 @@ import { NextResponse } from 'next/server'
 import bcrypt from 'bcryptjs'
 import prisma from '@/lib/db'
 import { createAuditLog } from '@/lib/audit-log'
+import { verifySameOrigin } from '@/lib/csrf'
 import { hashToken } from '@/lib/otp'
 import { checkRateLimit, extractClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { validatePasswordStrength } from '@/lib/validation/user'
 
 export async function POST(request: Request) {
   try {
+    const csrfError = verifySameOrigin(request)
+    if (csrfError) return csrfError
+
     const clientIp = extractClientIp(request)
     const ipLimit = await checkRateLimit({
       key: `reset-password:ip:${clientIp}`,

@@ -171,9 +171,13 @@ export async function recordEvaluationToCandidateMemory(params: {
   }
 
   const allConcepts = new Map<string, { displayName: string; isWeak: boolean }>()
-  for (const c of [...(params.coreConcepts ?? []), ...(params.correctConcepts ?? [])]) {
+  for (const c of params.coreConcepts ?? []) {
     const key = normalizeConceptKey(c)
-    if (key) allConcepts.set(key, { displayName: c.trim(), isWeak: weakSet.has(key) || params.score < 60 })
+    if (key) allConcepts.set(key, { displayName: c.trim(), isWeak: weakSet.has(key) })
+  }
+  for (const c of params.correctConcepts ?? []) {
+    const key = normalizeConceptKey(c)
+    if (key) allConcepts.set(key, { displayName: c.trim(), isWeak: false })
   }
   for (const c of [
     ...(params.missingConcepts ?? []),
@@ -241,14 +245,33 @@ export async function recordEvaluationToCandidateMemory(params: {
     })
   }
 
-  // Update CandidateProfile incrementally
-  const profile = await prisma.candidateProfile.findUnique({
-    where: { candidateId: params.candidateId },
-  })
+  // Update CandidateProfile atomically from authoritative DB aggregates
+  const [profile, evalAgg] = await Promise.all([
+    prisma.candidateProfile.findUnique({ where: { candidateId: params.candidateId } }),
+    typeof prisma.answerEvaluation?.aggregate === 'function'
+      ? prisma.answerEvaluation
+          .aggregate({
+            where: {
+              answer: {
+                question: {
+                  session: { candidateId: params.candidateId },
+                },
+              },
+            },
+            _count: { id: true },
+            _avg: { score: true },
+          })
+          .catch(() => null)
+      : Promise.resolve(null),
+  ])
   const prevTotal = profile?.totalEvaluations ?? 0
-  const nextTotal = prevTotal + 1
+  const nextTotal =
+    evalAgg && evalAgg._count?.id > 0 ? evalAgg._count.id : prevTotal + 1
   const prevAvg = profile?.averageScore ?? params.score
-  const nextAvg = Math.round(((prevAvg * prevTotal + params.score) / nextTotal) * 100) / 100
+  const nextAvg =
+    evalAgg && typeof evalAgg._avg?.score === 'number'
+      ? Math.round(evalAgg._avg.score * 100) / 100
+      : Math.round(((prevAvg * prevTotal + params.score) / nextTotal) * 100) / 100
 
   const styleSummary = summarizeReasoningStyle(
     params.reasoningQuality ?? '',
@@ -356,14 +379,22 @@ export async function refreshRevisionRecommendations(
     })
   }
 
-  await prisma.revisionRecommendation.deleteMany({
-    where: { candidateId, status: 'pending' },
-  })
+  // Preserve completed or dismissed historical recommendations across refreshes
+  const existingDone =
+    typeof prisma.revisionRecommendation.findMany === 'function'
+      ? await prisma.revisionRecommendation
+          .findMany({
+            where: { candidateId, status: { in: ['completed', 'dismissed'] } },
+            select: { conceptName: true },
+          })
+          .catch(() => [])
+      : []
+  const excludedConcepts = new Set(existingDone.map((r) => normalizeConceptKey(r.conceptName)))
+  const filteredRanked = ranked.filter(
+    (entry) => !excludedConcepts.has(normalizeConceptKey(entry.m.conceptName))
+  )
 
-  if (ranked.length === 0) return []
-
-  const created = []
-  for (const { m, risk, priorityScore } of ranked) {
+  const recordsToCreate = filteredRanked.map(({ m, risk, priorityScore }) => {
     const matchedDoc =
       m.linkedDocumentId && m.linkedDocumentName
         ? { id: m.linkedDocumentId, name: m.linkedDocumentName }
@@ -380,22 +411,42 @@ export async function refreshRevisionRecommendations(
       `${Math.round(risk.forgettingRisk * 100)}% forgetting risk (${risk.daysSinceTested}d since review)`,
     ].filter(Boolean)
 
-    const rec = await prisma.revisionRecommendation.create({
-      data: {
-        candidateId,
-        conceptName: m.conceptName,
-        subject: m.subject,
-        priorityScore,
-        forgettingRisk: risk.forgettingRisk,
-        reason: reasonParts.join(' • '),
-        linkedDocumentId: matchedDoc?.id ?? null,
-        linkedDocumentName: matchedDoc?.name ?? null,
-        status: 'pending',
-      },
+    return {
+      candidateId,
+      conceptName: m.conceptName,
+      subject: m.subject,
+      priorityScore,
+      forgettingRisk: risk.forgettingRisk,
+      reason: reasonParts.join(' • '),
+      linkedDocumentId: matchedDoc?.id ?? null,
+      linkedDocumentName: matchedDoc?.name ?? null,
+      status: 'pending',
+    }
+  })
+
+  if (typeof prisma.$transaction === 'function' && typeof prisma.revisionRecommendation.createMany === 'function') {
+    await prisma.$transaction(async (tx) => {
+      await tx.revisionRecommendation.deleteMany({
+        where: { candidateId, status: 'pending' },
+      })
+      if (recordsToCreate.length > 0) {
+        await tx.revisionRecommendation.createMany({ data: recordsToCreate })
+      }
     })
-    created.push(rec)
+    return prisma.revisionRecommendation.findMany({
+      where: { candidateId, status: 'pending' },
+      orderBy: { priorityScore: 'desc' },
+    })
   }
 
+  await prisma.revisionRecommendation.deleteMany({
+    where: { candidateId, status: 'pending' },
+  })
+  if (recordsToCreate.length === 0) return []
+  const created = []
+  for (const data of recordsToCreate) {
+    created.push(await prisma.revisionRecommendation.create({ data }))
+  }
   return created
 }
 
@@ -445,6 +496,12 @@ export async function buildAnonymizedMemoryContext(candidateId: string): Promise
     profile?.technicalStrengths?.length
       ? `- Prior Technical Strengths: ${profile.technicalStrengths.slice(0, 6).join(', ')}`
       : null,
+    profile?.communicationTraits?.length
+      ? `- Communication Traits: ${profile.communicationTraits.slice(0, 4).join('; ')}`
+      : null,
+    profile?.learningPreferences?.length
+      ? `- Recommended Learning Focus: ${profile.learningPreferences.slice(0, 4).join('; ')}`
+      : null,
     recurringWeaknesses.length > 0
       ? `- Recurring Cross-Session Weaknesses: ${recurringWeaknesses.join('; ')}`
       : null,
@@ -456,13 +513,17 @@ export async function buildAnonymizedMemoryContext(candidateId: string): Promise
     .join('\n')
 }
 
-export async function getCandidateLearningSnapshot(candidateId: string) {
+export async function getCandidateLearningSnapshot(
+  candidateId: string,
+  options?: { interviewerId?: number }
+) {
   const now = new Date()
-  const [profile, masteries, revisions, sessions] = await Promise.all([
+  const [profile, masteries, revisions, recentSessions] = await Promise.all([
     prisma.candidateProfile.findUnique({ where: { candidateId } }),
     prisma.candidateConceptMastery.findMany({
       where: { candidateId },
       orderBy: [{ masteryScore: 'asc' }, { weaknessCount: 'desc' }],
+      take: 100,
     }),
     prisma.revisionRecommendation.findMany({
       where: { candidateId, status: 'pending' },
@@ -470,8 +531,14 @@ export async function getCandidateLearningSnapshot(candidateId: string) {
       take: 10,
     }),
     prisma.interviewSession.findMany({
-      where: { candidateId },
-      orderBy: { startedAt: 'asc' },
+      where: {
+        candidateId,
+        ...(typeof options?.interviewerId === 'number'
+          ? { interviewerId: options.interviewerId }
+          : {}),
+      },
+      orderBy: { startedAt: 'desc' },
+      take: 100,
       select: {
         id: true,
         startedAt: true,
@@ -486,6 +553,8 @@ export async function getCandidateLearningSnapshot(candidateId: string) {
       },
     }),
   ])
+
+  const sessions = [...recentSessions].reverse()
 
   const enrichedMasteries = masteries.map((m) => {
     const estimate = computeForgettingRisk({
@@ -502,6 +571,7 @@ export async function getCandidateLearningSnapshot(candidateId: string) {
       daysSinceTested: estimate.daysSinceTested,
       stabilityDays: estimate.stabilityDays,
       riskLabel: estimate.riskLabel,
+      recommendedReviewAt: m.recommendedReviewAt ?? estimate.recommendedReviewAt,
     }
   })
 

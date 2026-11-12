@@ -71,12 +71,14 @@ export async function generateGeminiResponse(prompt: string, customApiKey?: stri
 
   const model = getGeminiModel(customApiKey)
 
-  // Bounded timeout (25 seconds) to prevent hanging
+  // Bounded timeout (25 seconds) with AbortController to cancel underlying request
   const TIMEOUT_MS = 25000
+  const controller = new AbortController()
   let timer: NodeJS.Timeout | null = null
 
   const timeoutPromise = new Promise<never>((_, reject) => {
     timer = setTimeout(() => {
+      controller.abort()
       const timeoutErr = Object.assign(new Error('[gemini] Request timed out after 25s'), {
         code: 'ETIMEDOUT',
         adapterTimeout: true,
@@ -89,7 +91,13 @@ export async function generateGeminiResponse(prompt: string, customApiKey?: stri
 
   try {
     const executePromise = (async () => {
-      const result = await model.generateContent(prompt)
+      const result = await model.generateContent(
+        {
+          contents: [{ role: 'user', parts: [{ text: prompt }] }],
+          generationConfig: { maxOutputTokens: 2048 },
+        },
+        { signal: controller.signal }
+      )
       const response = result.response
       const text = response.text()
       if (!text) {

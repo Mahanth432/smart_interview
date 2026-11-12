@@ -4,6 +4,7 @@ import React, { useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import Icon from '@/components/Icon'
+import { SystemHealthBadge } from '@/components/SystemHealthBadge'
 
 interface SidebarProps {
   role?: string
@@ -138,21 +139,7 @@ export const Sidebar = ({ role = 'INTERVIEWER' }: SidebarProps) => {
       {/* System Status Footnote Card - Admin / Interviewer internal readiness */}
       {!collapsed && role !== 'CANDIDATE' && (
         <div className="sidebar-footer" style={{ padding: '0.85rem 1rem', borderTop: '1px solid var(--zentra-border-subtle)' }}>
-          <div style={{
-            background: 'var(--zentra-bg-muted)',
-            border: '1px solid var(--zentra-border)',
-            borderRadius: '16px',
-            padding: '0.75rem 1rem',
-          }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.2rem' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <span style={{ width: '7px', height: '7px', borderRadius: '50%', background: '#10b981', display: 'inline-block', boxShadow: '0 0 6px #10b981' }}></span>
-                <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--zentra-text-primary)' }}>RAG Pipeline</span>
-              </div>
-              <span style={{ fontSize: '0.7rem', color: '#10b981', fontWeight: 600 }}>Active</span>
-            </div>
-            <div style={{ fontSize: '0.7rem', color: 'var(--zentra-text-muted)' }}>Adaptive Engine Ready</div>
-          </div>
+          <SystemHealthBadge variant="sidebar" />
         </div>
       )}
     </aside>

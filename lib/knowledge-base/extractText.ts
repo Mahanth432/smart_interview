@@ -51,15 +51,32 @@ function resolveExtension(storagePath: string, originalFilename?: string, fileTy
   return ''
 }
 
-async function extractPdfText(buf: Buffer): Promise<string> {
+export interface ExtractedPage {
+  pageNumber: number
+  text: string
+}
+
+export interface ExtractedDocumentContent {
+  text: string
+  pages?: ExtractedPage[]
+}
+
+async function extractPdfContent(buf: Buffer): Promise<ExtractedDocumentContent> {
   // Lazy-load unpdf only for PDFs; its serverless pdfjs build polyfills DOMMatrix
   // in pure JS without requiring @napi-rs/canvas or browser globals.
   const { extractText } = await import('unpdf')
   const uint8 = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)
-  const result = await extractText(uint8, { mergePages: true })
-  const text = Array.isArray(result.text) ? result.text.join('\n') : String(result.text ?? '')
+  const result = await extractText(uint8, { mergePages: false })
+  const rawPages = Array.isArray(result.text)
+    ? result.text.map((p) => String(p ?? ''))
+    : [String(result.text ?? '')]
+  const pages: ExtractedPage[] = rawPages.map((pageText, index) => ({
+    pageNumber: index + 1,
+    text: normalizeText(pageText),
+  }))
+  const text = pages.map((p) => p.text).filter(Boolean).join('\n')
   console.log(`[extractText] PDF extracted characters: ${text.length} (${result.totalPages} pages)`)
-  return text
+  return { text, pages }
 }
 
 async function extractDocxText(buf: Buffer): Promise<string> {
@@ -74,17 +91,46 @@ async function extractDocxText(buf: Buffer): Promise<string> {
   return text
 }
 
-export async function extractTextFromBuffer(
+export function validateFileMagicBytes(
+  buf: Buffer,
+  ext: string
+): { ok: true } | { ok: false; error: string } {
+  const normalizedExt = ext.startsWith('.') ? ext.toLowerCase() : `.${ext.toLowerCase()}`
+  if (normalizedExt === '.pdf') {
+    const header = buf.subarray(0, 16).toString('latin1')
+    if (!header.includes('%PDF-')) {
+      return { ok: false, error: 'File signature does not match a valid PDF document.' }
+    }
+  } else if (normalizedExt === '.docx') {
+    if (buf.length < 4 || buf[0] !== 0x50 || buf[1] !== 0x4b || buf[2] !== 0x03 || buf[3] !== 0x04) {
+      return { ok: false, error: 'File signature does not match a valid DOCX archive.' }
+    }
+  } else if (normalizedExt === '.txt' || normalizedExt === '.md') {
+    if (buf.subarray(0, 4096).includes(0x00)) {
+      return { ok: false, error: 'Binary content is not allowed in plain text/markdown files.' }
+    }
+  }
+  return { ok: true }
+}
+
+export async function extractDocumentContentFromBuffer(
   buf: Buffer,
   originalFilename?: string,
   fileType?: string,
   storagePathHint = ''
-): Promise<string> {
+): Promise<ExtractedDocumentContent> {
   const ext = resolveExtension(storagePathHint, originalFilename, fileType)
+  const magicCheck = validateFileMagicBytes(buf, ext)
+  if (!magicCheck.ok) {
+    throw new Error(magicCheck.error)
+  }
   let rawText = ''
+  let pages: ExtractedPage[] | undefined
 
   if (ext === '.pdf') {
-    rawText = await extractPdfText(buf)
+    const pdfResult = await extractPdfContent(buf)
+    rawText = pdfResult.text
+    pages = pdfResult.pages
   } else if (ext === '.docx') {
     rawText = await extractDocxText(buf)
   } else if (ext === '.txt' || ext === '.md') {
@@ -102,7 +148,27 @@ export async function extractTextFromBuffer(
     throw new Error('No meaningful text could be extracted from the document')
   }
 
-  return normalized
+  return pages ? { text: normalized, pages } : { text: normalized }
+}
+
+export async function extractTextFromBuffer(
+  buf: Buffer,
+  originalFilename?: string,
+  fileType?: string,
+  storagePathHint = ''
+): Promise<string> {
+  const content = await extractDocumentContentFromBuffer(buf, originalFilename, fileType, storagePathHint)
+  return content.text
+}
+
+export async function extractDocumentContentFromFile(
+  storagePath: string,
+  originalFilename?: string,
+  fileType?: string
+): Promise<ExtractedDocumentContent> {
+  if (!storagePath) throw new Error('Missing storage path')
+  const buf = await readDocumentBuffer(storagePath)
+  return extractDocumentContentFromBuffer(buf, originalFilename, fileType, storagePath)
 }
 
 export async function extractTextFromFile(
@@ -110,9 +176,8 @@ export async function extractTextFromFile(
   originalFilename?: string,
   fileType?: string
 ): Promise<string> {
-  if (!storagePath) throw new Error('Missing storage path')
-  const buf = await readDocumentBuffer(storagePath)
-  return extractTextFromBuffer(buf, originalFilename, fileType, storagePath)
+  const content = await extractDocumentContentFromFile(storagePath, originalFilename, fileType)
+  return content.text
 }
 
 export default extractTextFromFile

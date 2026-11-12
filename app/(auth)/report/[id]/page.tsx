@@ -58,6 +58,10 @@ export default async function ReportPage({ params }: { params: Promise<{ id: str
 
   if (!isOwner) return notFound()
 
+  if (userSession.role === 'CANDIDATE' && session.status !== 'completed') {
+    return notFound()
+  }
+
   if (userSession.role === 'CANDIDATE') {
     const { createAuditLog } = await import('@/lib/audit-log')
     createAuditLog({
@@ -309,7 +313,7 @@ export default async function ReportPage({ params }: { params: Promise<{ id: str
       {/* Executive Report Summary */}
       {session.report && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
-          {session.report.editedAt && (
+          {userSession.role !== 'CANDIDATE' && session.report.editedAt && (
             <div className="zentra-card" style={{ borderColor: 'rgba(37, 99, 235, 0.3)', padding: '1rem 1.25rem' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
                 <span style={{ fontSize: '0.825rem', color: 'var(--zentra-text-secondary)' }}>

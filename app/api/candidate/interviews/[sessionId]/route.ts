@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getAppSession } from '@/lib/auth'
+import { getValidatedAppSession } from '@/lib/auth-server'
 import prisma from '@/lib/db'
+import { sanitizeReportForRole } from '@/lib/report-privacy'
 
 export async function GET(
   req: NextRequest,
@@ -8,7 +9,7 @@ export async function GET(
 ) {
   try {
     const res = NextResponse.json({})
-    const userSession = await getAppSession(req as unknown as Request, res as unknown as Response)
+    const userSession = await getValidatedAppSession(req as unknown as Request, res as unknown as Response)
 
     if (!userSession?.isLoggedIn || !userSession?.userId) {
       return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 })
@@ -102,7 +103,7 @@ export async function GET(
       interviewer: {
         username: session.interviewer?.username || 'System'
       },
-      report: session.report,
+      report: session.status === 'completed' ? sanitizeReportForRole(session.report, 'CANDIDATE') : null,
       questions
     })
   } catch (err: unknown) {

@@ -18,16 +18,6 @@ export default function LoginPage() {
   const [successMsg, setSuccessMsg] = useState('')
   const [isLoading, setIsLoading] = useState(false)
 
-  // Legacy passwordless account setup state
-  const [requiresPasswordSetup, setRequiresPasswordSetup] = useState(false)
-  const [legacyEmail, setLegacyEmail] = useState('')
-  const [setupOtp, setSetupOtp] = useState('')
-  const [setupOtpSent, setSetupOtpSent] = useState(false)
-  const [newPassword, setNewPassword] = useState('')
-  const [confirmNewPassword, setConfirmNewPassword] = useState('')
-  const [showNewPassword, setShowNewPassword] = useState(false)
-  const [showConfirmNewPassword, setShowConfirmNewPassword] = useState(false)
-
   // Check URL query parameters on mount
   useEffect(() => {
     if (typeof window === 'undefined') return
@@ -72,15 +62,6 @@ export default function LoginPage() {
 
       const data = await res.json()
 
-      // Handle legacy accounts without password
-      if (res.status === 403 && data.requiresPasswordSetup) {
-        setLegacyEmail(data.email || trimmedInput)
-        setRequiresPasswordSetup(true)
-        setError('')
-        setIsLoading(false)
-        return
-      }
-
       if (!res.ok || !data.success) {
         throw new Error(data.error || 'Invalid username/email or password.')
       }
@@ -92,90 +73,6 @@ export default function LoginPage() {
       router.refresh()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Invalid credentials. Please try again.')
-      setIsLoading(false)
-    }
-  }
-
-  // Request OTP for Legacy Password Setup
-  const handleRequestSetupOtp = async () => {
-    setError('')
-    setSuccessMsg('')
-    setIsLoading(true)
-    try {
-      const res = await fetch('/api/auth/set-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'request-otp',
-          email: legacyEmail,
-        }),
-      })
-      const data = await res.json()
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to send verification code.')
-      }
-      setSetupOtpSent(true)
-      setSuccessMsg(data.message || 'Verification code sent to your email.')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to send verification code.')
-    } finally {
-      setIsLoading(false)
-    }
-  }
-
-  // Handle Legacy Account Password Setup (OTP-verified)
-  const handleSetupPassword = async (e: React.FormEvent) => {
-    e.preventDefault()
-    setError('')
-    setSuccessMsg('')
-
-    if (!/^\d{6}$/.test(setupOtp.trim())) {
-      setError('Please enter the 6-digit verification code sent to your email.')
-      return
-    }
-    if (!newPassword) {
-      setError('Please enter a new password.')
-      return
-    }
-    if (newPassword.length < 8) {
-      setError('Password must be at least 8 characters long.')
-      return
-    }
-    if (!/[0-9!@#$%^&*()_+\-=\[\]{}|;:,.<>?]/.test(newPassword)) {
-      setError('Password must contain at least one number or special character.')
-      return
-    }
-    if (newPassword !== confirmNewPassword) {
-      setError('Passwords do not match.')
-      return
-    }
-
-    setIsLoading(true)
-    try {
-      const res = await fetch('/api/auth/set-password', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'confirm',
-          email: legacyEmail,
-          otp: setupOtp.trim(),
-          newPassword,
-        }),
-      })
-
-      const data = await res.json()
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to setup password.')
-      }
-
-      setRequiresPasswordSetup(false)
-      setSetupOtp('')
-      setSetupOtpSent(false)
-      setPassword(newPassword)
-      setSuccessMsg('Password verified & configured! Please sign in using your new password.')
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to setup password.')
-    } finally {
       setIsLoading(false)
     }
   }
@@ -217,7 +114,7 @@ export default function LoginPage() {
               SmartInterview AI
             </h1>
             <p style={{ color: 'var(--color-text-secondary)', fontSize: '0.875rem', margin: 0 }}>
-              {requiresPasswordSetup ? 'Setup Account Password' : 'Sign In to Your Workspace'}
+              Sign In to Your Workspace
             </p>
           </div>
 
@@ -235,161 +132,8 @@ export default function LoginPage() {
             </div>
           )}
 
-          {/* Legacy Account Password Setup View */}
-          {requiresPasswordSetup ? (
-            <div>
-              <div className="auth-alert auth-alert-info" style={{ marginBottom: '1.25rem' }}>
-                <Icon name="info" size={16} style={{ flexShrink: 0, marginTop: '1px' }} />
-                <div>
-                  Your account (<strong style={{ wordBreak: 'break-all' }}>{legacyEmail}</strong>) requires OTP verification to set a password.
-                </div>
-              </div>
-
-              <div style={{ marginBottom: '1rem' }}>
-                <button
-                  type="button"
-                  onClick={handleRequestSetupOtp}
-                  disabled={isLoading}
-                  className="auth-submit-btn"
-                  style={{
-                    background: 'var(--zentra-bg-muted, rgba(99, 102, 241, 0.12))',
-                    color: 'var(--color-text-primary)',
-                    border: '1px solid var(--zentra-border, rgba(99, 102, 241, 0.3))',
-                  }}
-                >
-                  {setupOtpSent ? 'Resend Verification Code' : 'Send 6-Digit Verification Code'}
-                </button>
-              </div>
-
-              <form onSubmit={handleSetupPassword} style={{ display: 'flex', flexDirection: 'column', gap: '1.1rem' }}>
-                <div>
-                  <label
-                    htmlFor="legacy-setup-otp"
-                    style={{
-                      display: 'block',
-                      fontSize: '0.85rem',
-                      color: 'var(--color-text-secondary)',
-                      marginBottom: '0.45rem',
-                      fontWeight: 500,
-                    }}
-                  >
-                    6-Digit Verification Code
-                  </label>
-                  <input
-                    id="legacy-setup-otp"
-                    type="text"
-                    inputMode="numeric"
-                    maxLength={6}
-                    className="auth-input"
-                    value={setupOtp}
-                    onChange={(e) => setSetupOtp(e.target.value.replace(/\D/g, '').slice(0, 6))}
-                    placeholder="Enter 6-digit OTP"
-                    required
-                    disabled={isLoading}
-                  />
-                </div>
-                <div>
-                  <label
-                    htmlFor="legacy-new-pass"
-                    style={{
-                      display: 'block',
-                      fontSize: '0.85rem',
-                      color: 'var(--color-text-secondary)',
-                      marginBottom: '0.45rem',
-                      fontWeight: 500,
-                    }}
-                  >
-                    New Password
-                  </label>
-                  <div style={{ position: 'relative' }}>
-                    <input
-                      id="legacy-new-pass"
-                      type={showNewPassword ? 'text' : 'password'}
-                      className="auth-input auth-input-password"
-                      value={newPassword}
-                      onChange={(e) => setNewPassword(e.target.value)}
-                      placeholder="Min 8 chars, 1 number or symbol"
-                      required
-                      disabled={isLoading}
-                    />
-                    <button
-                      type="button"
-                      className="auth-vis-toggle"
-                      onClick={() => setShowNewPassword(!showNewPassword)}
-                      aria-label={showNewPassword ? 'Hide password' : 'Show password'}
-                    >
-                      <Icon name={showNewPassword ? 'visibility_off' : 'visibility'} size={18} />
-                    </button>
-                  </div>
-                </div>
-
-                <div>
-                  <label
-                    htmlFor="legacy-confirm-pass"
-                    style={{
-                      display: 'block',
-                      fontSize: '0.85rem',
-                      color: 'var(--color-text-secondary)',
-                      marginBottom: '0.45rem',
-                      fontWeight: 500,
-                    }}
-                  >
-                    Confirm Password
-                  </label>
-                  <div style={{ position: 'relative' }}>
-                    <input
-                      id="legacy-confirm-pass"
-                      type={showConfirmNewPassword ? 'text' : 'password'}
-                      className="auth-input auth-input-password"
-                      value={confirmNewPassword}
-                      onChange={(e) => setConfirmNewPassword(e.target.value)}
-                      placeholder="Repeat your new password"
-                      required
-                      disabled={isLoading}
-                    />
-                    <button
-                      type="button"
-                      className="auth-vis-toggle"
-                      onClick={() => setShowConfirmNewPassword(!showConfirmNewPassword)}
-                      aria-label={showConfirmNewPassword ? 'Hide password' : 'Show password'}
-                    >
-                      <Icon name={showConfirmNewPassword ? 'visibility_off' : 'visibility'} size={18} />
-                    </button>
-                  </div>
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={isLoading}
-                  className="auth-submit-btn"
-                  style={{
-                    marginTop: '0.4rem',
-                    background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
-                    color: '#ffffff',
-                    cursor: isLoading ? 'not-allowed' : 'pointer',
-                  }}
-                >
-                  {isLoading ? 'Setting password…' : 'Set Password'}
-                </button>
-
-                <div style={{ textAlign: 'center', marginTop: '0.5rem' }}>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setRequiresPasswordSetup(false)
-                      setError('')
-                    }}
-                    className="auth-back-btn"
-                    style={{ margin: '0 auto', fontSize: '0.82rem' }}
-                  >
-                    <Icon name="arrow_back" size={14} /> Back to Sign In
-                  </button>
-                </div>
-              </form>
-            </div>
-          ) : (
-            /* Standard Login Form — No Role Selector */
-            <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '1.15rem' }}>
+          {/* Standard Login Form — No Role Selector */}
+          <form onSubmit={handleLogin} style={{ display: 'flex', flexDirection: 'column', gap: '1.15rem' }}>
               <div>
                 <label
                   htmlFor="username-or-email"
@@ -479,14 +223,21 @@ export default function LoginPage() {
                 {isLoading ? 'Signing In…' : 'Sign In'}
               </button>
 
-              <div style={{ marginTop: '1.25rem', textAlign: 'center', fontSize: '0.85rem', color: 'var(--color-text-muted)' }}>
-                <span>Don&apos;t have an account? </span>
-                <Link href="/register" style={{ color: '#818cf8', textDecoration: 'none', fontWeight: 500 }}>
-                  Create Account
-                </Link>
+              <div style={{ marginTop: '1.25rem', textAlign: 'center', fontSize: '0.85rem', color: 'var(--color-text-muted)', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                <div>
+                  <span>Don&apos;t have an account? </span>
+                  <Link href="/register" style={{ color: '#818cf8', textDecoration: 'none', fontWeight: 500 }}>
+                    Create Account
+                  </Link>
+                </div>
+                <div style={{ fontSize: '0.8rem' }}>
+                  <span>Need to set up or reset a password? </span>
+                  <Link href="/forgot-password" style={{ color: '#818cf8', textDecoration: 'none', fontWeight: 500 }}>
+                    Verify via Email OTP
+                  </Link>
+                </div>
               </div>
             </form>
-          )}
         </div>
       </div>
     </div>

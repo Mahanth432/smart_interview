@@ -5,10 +5,14 @@ import { hashToken } from '@/lib/otp'
 import { verifyAndConsumeOtp, type OtpPurpose } from '@/lib/otp-store'
 import { establishUserSession } from '@/lib/auth-server'
 import { createAuditLog } from '@/lib/audit-log'
+import { verifySameOrigin } from '@/lib/csrf'
 import { checkRateLimit, extractClientIp, rateLimitResponse } from '@/lib/rate-limit'
 
 export async function POST(req: NextRequest) {
   try {
+    const csrfError = verifySameOrigin(req)
+    if (csrfError) return csrfError
+
     const clientIp = extractClientIp(req)
     const ipLimit = await checkRateLimit({
       key: `verify-otp:ip:${clientIp}`,
@@ -72,7 +76,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (!user) {
-      return NextResponse.json({ error: 'Account not found.' }, { status: 404 })
+      return NextResponse.json({ error: 'Invalid or expired verification code.' }, { status: 400 })
     }
 
     // --- FLOW: PASSWORD RESET ---

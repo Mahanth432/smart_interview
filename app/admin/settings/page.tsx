@@ -20,6 +20,7 @@ const defaultSettings: Record<string, string> = {
   'rag.top_k': '5',
   'rag.chunk_size': '1200',
   'rag.chunk_overlap': '200',
+  'rag.min_similarity': '0.25',
   'auth.session_timeout_hours': '24',
   'llm.default_provider': 'gemini',
 }
@@ -242,6 +243,18 @@ export default function AdminSettingsPage() {
             step={50}
             value={settings['rag.chunk_overlap'] || '200'}
             onChange={e => set('rag.chunk_overlap', e.target.value)}
+            className="zentra-input"
+            style={{ width: '100px', textAlign: 'right' }}
+          />
+        ))}
+        {settingRow('Minimum Cosine Similarity', 'Minimum semantic similarity threshold (0.00-0.95)', (
+          <input
+            type="number"
+            min={0}
+            max={0.95}
+            step={0.05}
+            value={settings['rag.min_similarity'] || '0.25'}
+            onChange={e => set('rag.min_similarity', e.target.value)}
             className="zentra-input"
             style={{ width: '100px', textAlign: 'right' }}
           />

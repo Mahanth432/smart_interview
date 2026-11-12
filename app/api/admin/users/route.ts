@@ -2,9 +2,11 @@ import { NextResponse } from 'next/server'
 import bcrypt from 'bcryptjs'
 import { Prisma } from '@prisma/client'
 import { getValidatedAppSession } from '@/lib/auth-server'
+import { verifySameOrigin } from '@/lib/csrf'
 import { parsePaginationParams } from '@/lib/validation/query'
 import prisma from '@/lib/db'
 import { createAuditLog } from '@/lib/audit-log'
+import { enforceRateLimit } from '@/lib/rate-limit'
 import {
   normalizeUsername,
   normalizeEmail,
@@ -103,6 +105,8 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    const csrfError = verifySameOrigin(request)
+    if (csrfError) return csrfError
     const response = NextResponse.json({})
     const session = await getValidatedAppSession(request, response)
 
@@ -113,6 +117,16 @@ export async function POST(request: Request) {
     if (session.role !== 'ADMIN') {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
     }
+
+    const rlError = await enforceRateLimit(
+      {
+        key: `admin:users:user:${session.userId}`,
+        limit: 40,
+        windowSeconds: 15 * 60,
+      },
+      'Too many admin user management requests. Please wait before trying again.'
+    )
+    if (rlError) return rlError
 
     const body = await request.json()
     const usernameInput = normalizeUsername(body.username)

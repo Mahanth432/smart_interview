@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getAppSession } from '@/lib/auth'
+import { getValidatedAppSession } from '@/lib/auth-server'
 import prisma from '@/lib/db'
 
 import { formatInterviewerName } from '@/lib/formatters'
@@ -7,7 +7,7 @@ import { formatInterviewerName } from '@/lib/formatters'
 export async function GET(request: Request) {
   try {
     const response = NextResponse.json({})
-    const session = await getAppSession(request, response)
+    const session = await getValidatedAppSession(request, response)
 
     if (!session?.isLoggedIn || !session.userId) {
       return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 })

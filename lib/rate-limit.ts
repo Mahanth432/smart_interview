@@ -86,3 +86,18 @@ export function rateLimitResponse(
     }
   )
 }
+
+/**
+ * Convenience helper for route handlers: checks a rate limit and returns a 429
+ * NextResponse if exceeded, or null when allowed.
+ */
+export async function enforceRateLimit(
+  options: RateLimitOptions,
+  message?: string
+): Promise<NextResponse | null> {
+  const result = await checkRateLimit(options)
+  if (!result.allowed) {
+    return rateLimitResponse(result.retryAfterSeconds, message)
+  }
+  return null
+}

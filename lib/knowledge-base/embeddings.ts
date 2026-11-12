@@ -7,6 +7,7 @@
  * - No OpenAI, no mock/random vectors, no external embedding API
  */
 
+import fs from 'fs'
 import os from 'os'
 import path from 'path'
 
@@ -24,30 +25,67 @@ let _pipelinePromise: Promise<unknown> | null = globalThis._embeddingPipelinePro
  * Load (or return cached) embedding pipeline promise.
  * Concurrent requests share the same in-flight promise to prevent duplicate model loads.
  */
+const MODEL_LOAD_TIMEOUT_MS = 20_000
+
+async function loadPipelineWithTimeout(): Promise<unknown> {
+  const { pipeline, env } = await import('@xenova/transformers')
+  if (process.env.VERCEL || process.env.VERCEL_ENV || process.env.TRANSFORMERS_CACHE) {
+    // Ephemeral /tmp cache is reused across warm invocations on the same serverless instance
+    const cacheDir = process.env.TRANSFORMERS_CACHE || path.join(os.tmpdir(), 'transformers-cache')
+    fs.mkdirSync(cacheDir, { recursive: true })
+    env.cacheDir = cacheDir
+    env.useFSCache = true
+  }
+
+  let timeoutId: ReturnType<typeof setTimeout> | undefined
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => {
+      reject(new Error(`Embedding model load timed out after ${MODEL_LOAD_TIMEOUT_MS}ms`))
+    }, MODEL_LOAD_TIMEOUT_MS)
+  })
+
+  try {
+    console.log('[embeddings] Loading local model: Xenova/all-MiniLM-L6-v2 ...')
+    const pipe = await Promise.race([
+      pipeline('feature-extraction', EMBEDDING_MODEL, {
+        progress_callback: undefined,
+      }),
+      timeoutPromise,
+    ])
+    console.log('[embeddings] Model loaded successfully')
+    return pipe
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId)
+  }
+}
+
+/**
+ * Load (or return cached) embedding pipeline promise.
+ * Concurrent requests share the same in-flight promise to prevent duplicate model loads.
+ * Retries once on transient cold-start download errors and clears cache on failure.
+ */
 export function getEmbeddingPipeline(): Promise<unknown> {
   if (!_pipelinePromise) {
     _pipelinePromise = (async () => {
-      const { pipeline, env } = await import('@xenova/transformers')
-      if (process.env.VERCEL || process.env.VERCEL_ENV || process.env.TRANSFORMERS_CACHE) {
-        env.cacheDir =
-          process.env.TRANSFORMERS_CACHE || path.join(os.tmpdir(), 'transformers-cache')
+      try {
+        return await loadPipelineWithTimeout()
+      } catch (firstErr) {
+        console.warn(
+          '[embeddings] Cold-start model load failed, retrying once:',
+          firstErr instanceof Error ? firstErr.message : String(firstErr)
+        )
+        await new Promise((resolve) => setTimeout(resolve, 500))
+        return await loadPipelineWithTimeout()
       }
-      console.log('[embeddings] Loading local model: Xenova/all-MiniLM-L6-v2 ...')
-      const pipe = await pipeline('feature-extraction', EMBEDDING_MODEL, {
-        // Suppress informational logs from the transformers library
-        progress_callback: undefined,
-      })
-      console.log('[embeddings] Model loaded successfully')
-      return pipe
     })().catch((err) => {
       _pipelinePromise = null
       globalThis._embeddingPipelinePromise = null
-      throw err
+      throw new Error(
+        `Embedding pipeline unavailable: ${err instanceof Error ? err.message : String(err)}`
+      )
     })
 
-    if (process.env.NODE_ENV !== 'production') {
-      globalThis._embeddingPipelinePromise = _pipelinePromise
-    }
+    globalThis._embeddingPipelinePromise = _pipelinePromise
   }
   return _pipelinePromise
 }
@@ -92,9 +130,13 @@ function toVector(output: unknown): number[] {
  */
 function normalizeVector(vec: number[]): number[] {
   const norm = Math.sqrt(vec.reduce((s, v) => s + v * v, 0))
-  if (norm === 0) return vec
+  if (!Number.isFinite(norm) || norm === 0) {
+    throw new Error('[embeddings] Zero-norm or non-finite embedding vector produced')
+  }
   return vec.map((v) => v / norm)
 }
+
+const MAX_EMBEDDING_INPUT_CHARS = 1800
 
 /**
  * Generate a 384-dimensional embedding for a single text string.
@@ -105,11 +147,14 @@ export async function generateEmbedding(text: string): Promise<number[]> {
     throw new Error('[embeddings] Cannot generate embedding for empty text')
   }
 
+  const boundedText =
+    text.length > MAX_EMBEDDING_INPUT_CHARS ? text.slice(0, MAX_EMBEDDING_INPUT_CHARS) : text
+
   const pipe = (await getEmbeddingPipeline()) as (
     text: string,
     options?: { pooling?: string; normalize?: boolean }
   ) => Promise<{ data?: Float32Array; dims?: number[]; tolist?: () => number[] | number[][] }>
-  const output = await pipe(text, { pooling: 'mean', normalize: true })
+  const output = await pipe(boundedText, { pooling: 'mean', normalize: true })
 
   // Try the convenient accessor first (newer @xenova/transformers returns it pooled)
   let vec: number[]
@@ -140,7 +185,7 @@ export async function generateEmbedding(text: string): Promise<number[]> {
 export async function generateEmbeddingsBatch(texts: string[]): Promise<number[][]> {
   if (texts.length === 0) return []
 
-  const BATCH_SIZE = 32 // balance throughput vs memory for MiniLM
+  const BATCH_SIZE = 4 // bounded concurrency to prevent Vercel serverless memory exhaustion
   const results: number[][] = []
 
   console.log(`[embeddings] Generating embeddings for ${texts.length} chunks (batches of ${BATCH_SIZE})`)

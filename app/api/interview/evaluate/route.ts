@@ -2,8 +2,14 @@ import { NextRequest, NextResponse } from 'next/server'
 import { Prisma } from '@prisma/client'
 import prisma from '@/lib/db'
 import { generateLLMResponse, handleLLMError } from '@/lib/llm'
-import { ANSWER_EVALUATOR_PROMPT, QUESTION_GENERATOR_PROMPT } from '@/lib/llm/prompts'
+import {
+  ANSWER_EVALUATOR_PROMPT,
+  QUESTION_GENERATOR_PROMPT,
+  renderPromptTemplate,
+  sanitizeUntrustedText,
+} from '@/lib/llm/prompts'
 import { determineNextQuestionParams, updateSessionState } from '@/lib/interview/engine'
+import { expireStaleSessions } from '@/lib/interview/lifecycle'
 import { parseEvaluationScore } from '@/lib/interview/difficulty'
 import {
   buildAnonymizedMemoryContext,
@@ -12,6 +18,7 @@ import {
 } from '@/lib/interview/memory'
 import { formatRagContextWithCitations, searchChunks } from '@/lib/knowledge-base/searchChunks'
 import { getValidatedAppSession } from '@/lib/auth-server'
+import { verifySameOrigin } from '@/lib/csrf'
 import { checkRateLimit, rateLimitResponse } from '@/lib/rate-limit'
 
 export const maxDuration = 60
@@ -22,7 +29,11 @@ function toStringArray(val: unknown): string[] {
 }
 
 export async function POST(req: NextRequest) {
+  let claimedAnswerId: string | null = null
   try {
+    const csrfError = verifySameOrigin(req)
+    if (csrfError) return csrfError
+
     const res = NextResponse.json({})
     const userSession = await getValidatedAppSession(req, res)
     if (!userSession?.isLoggedIn || !userSession.userId) {
@@ -66,7 +77,9 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Question not found or unauthorized' }, { status: 404 })
     }
 
-    if (question.session.status === 'completed' || question.session.status === 'abandoned') {
+    await expireStaleSessions().catch(() => {})
+
+    if (question.session.status !== 'active') {
       return NextResponse.json(
         { error: `Cannot evaluate answers on a ${question.session.status} session.` },
         { status: 409 }
@@ -87,22 +100,30 @@ export async function POST(req: NextRequest) {
         where: { sessionId, questionNumber: question.questionNumber + 1 },
       })
 
-      if (existingEval && nextQuestion) {
+      if (existingEval) {
         return NextResponse.json({
           success: true,
           alreadyProcessed: true,
           evaluation: existingEval,
-          nextQuestion: {
-            id: nextQuestion.id,
-            content: nextQuestion.content,
-            questionNumber: nextQuestion.questionNumber,
-          },
+          ...(nextQuestion
+            ? {
+                nextQuestion: {
+                  id: nextQuestion.id,
+                  content: nextQuestion.content,
+                  questionNumber: nextQuestion.questionNumber,
+                },
+              }
+            : {}),
         })
       }
 
-      if (existingEval) {
-        evalJson = existingEval as unknown as Record<string, unknown>
+      if (Date.now() - answer.answeredAt.getTime() < 45_000) {
+        return NextResponse.json(
+          { error: 'Evaluation is already in progress for this question. Please wait.' },
+          { status: 409 }
+        )
       }
+      claimedAnswerId = answer.id
     }
 
     if (!answer) {
@@ -113,6 +134,7 @@ export async function POST(req: NextRequest) {
             transcript,
           },
         })
+        claimedAnswerId = answer.id
       } catch (err: unknown) {
         if (
           err &&
@@ -120,8 +142,23 @@ export async function POST(req: NextRequest) {
           'code' in err &&
           (err as { code: string }).code === 'P2002'
         ) {
-          answer = await prisma.answer.findUnique({ where: { questionId: question.id } })
-          if (!answer) throw err
+          const racedAnswer = await prisma.answer.findUnique({ where: { questionId: question.id } })
+          if (racedAnswer) {
+            const racedEval = await prisma.answerEvaluation.findUnique({
+              where: { answerId: racedAnswer.id },
+            })
+            if (racedEval) {
+              return NextResponse.json({
+                success: true,
+                alreadyProcessed: true,
+                evaluation: racedEval,
+              })
+            }
+          }
+          return NextResponse.json(
+            { error: 'Evaluation is already in progress for this question. Please wait.' },
+            { status: 409 }
+          )
         } else {
           throw err
         }
@@ -184,12 +221,13 @@ export async function POST(req: NextRequest) {
       }
       const { contextText } = formatRagContextWithCitations(searchResults)
 
-      const evaluatorPrompt = ANSWER_EVALUATOR_PROMPT
-        .replace('{{question}}', question.content)
-        .replace('{{expected_answer}}', question.expectedAnswer || '')
-        .replace('{{required_keywords}}', question.requiredKeywords.join(', '))
-        .replace('{{candidate_answer}}', transcript)
-        .replace('{{context}}', contextText)
+      const evaluatorPrompt = renderPromptTemplate(ANSWER_EVALUATOR_PROMPT, {
+        '{{question}}': sanitizeUntrustedText(question.content, 2000),
+        '{{expected_answer}}': sanitizeUntrustedText(question.expectedAnswer || '', 2000),
+        '{{required_keywords}}': question.requiredKeywords.join(', '),
+        '{{candidate_answer}}': sanitizeUntrustedText(transcript, 6000),
+        '{{context}}': sanitizeUntrustedText(contextText, 6000),
+      })
 
       const { text: evaluationResponse } = await generateLLMResponse(
         evaluatorPrompt + '\n\nReply in strict JSON format.',
@@ -204,23 +242,35 @@ export async function POST(req: NextRequest) {
         try {
           evalJson = JSON.parse(cleaned)
         } catch {
-          console.error('Failed to parse eval JSON:', cleaned)
-          evalJson = {
-            score: 70,
-            correctness: 'Could not parse AI evaluation.',
-            completeness: '',
-            relevance: '',
-            technical_accuracy: '',
-            reasoning_quality: '',
-            correct_concepts: [],
-            missing_concepts: [],
-            incorrect_concepts: [],
-            feedback: 'LLM returned malformed JSON.',
+          console.error('Failed to parse eval JSON cleanly')
+          if (claimedAnswerId) {
+            await prisma.answer.delete({ where: { id: claimedAnswerId } }).catch(() => {})
+            claimedAnswerId = null
           }
+          return NextResponse.json(
+            { error: 'AI evaluation returned an invalid response. Please retry submitting your answer.' },
+            { status: 502 }
+          )
         }
       }
 
-      const safeScore = parseEvaluationScore(evalJson?.score, 70)
+      const rawScoreVal = evalJson?.score
+      const hasNumericScore =
+        typeof rawScoreVal === 'number'
+          ? Number.isFinite(rawScoreVal)
+          : typeof rawScoreVal === 'string' && rawScoreVal.trim() !== '' && Number.isFinite(Number(rawScoreVal))
+      if (!hasNumericScore) {
+        if (claimedAnswerId) {
+          await prisma.answer.delete({ where: { id: claimedAnswerId } }).catch(() => {})
+          claimedAnswerId = null
+        }
+        return NextResponse.json(
+          { error: 'AI evaluation did not include a valid score. Please retry submitting your answer.' },
+          { status: 502 }
+        )
+      }
+
+      const safeScore = parseEvaluationScore(rawScoreVal, 0)
       const commRaw = evalJson?.communication_score ?? evalJson?.communicationScore
       const commScore =
         commRaw !== undefined && commRaw !== null ? parseEvaluationScore(commRaw, safeScore) : null
@@ -285,17 +335,26 @@ export async function POST(req: NextRequest) {
 
       const recordedGaps: Array<{ concept: string }> = []
       if (Array.isArray(evalJson?.knowledge_gap)) {
+        const existingSessionGaps = await prisma.knowledgeGap.findMany({
+          where: { sessionId },
+          select: { concept: true },
+        })
+        const seenGapConcepts = new Set(
+          existingSessionGaps.map((g) => g.concept.trim().toLowerCase())
+        )
         for (const gap of evalJson.knowledge_gap as Array<{
           concept: string
           confidence: string
           evidence: string
         }>) {
-          if (gap?.concept) {
-            recordedGaps.push({ concept: String(gap.concept) })
+          const conceptName = typeof gap?.concept === 'string' ? gap.concept.trim() : ''
+          if (conceptName && !seenGapConcepts.has(conceptName.toLowerCase())) {
+            seenGapConcepts.add(conceptName.toLowerCase())
+            recordedGaps.push({ concept: conceptName })
             await prisma.knowledgeGap.create({
               data: {
                 sessionId,
-                concept: String(gap.concept),
+                concept: conceptName,
                 confidence: String(gap.confidence || 'Medium'),
                 evidence: String(gap.evidence || ''),
               },
@@ -443,20 +502,24 @@ export async function POST(req: NextRequest) {
       ? (scope.subjects as string[]).join(', ')
       : (scope.subject as string) || 'Configured Subject'
 
-    const generatorPrompt = QUESTION_GENERATOR_PROMPT
-      .replace('{{subject}}', (scope.subject as string) || 'Configured Subject')
-      .replace('{{multi_subjects}}', multiSubjects)
-      .replace('{{topic}}', question.topic || 'Adaptive Topic')
-      .replace('{{difficulty}}', nextParams.difficulty)
-      .replace('{{context}}', contextTextNext)
-      .replace('{{candidate_memory_context}}', memoryContextNext)
-      .replace('{{previous_question}}', question.content)
-      .replace('{{candidate_answer}}', candidateTranscript || 'No answer recorded')
-      .replace('{{evaluation_summary}}', evaluationSummary)
-      .replace('{{previous_questions}}', previousQuestionsFormatted)
-      .replace('{{earlier_context}}', nextParams.earlierContextText || 'None (First completed question)')
-      .replace('{{weak_concepts}}', nextParams.weakConcepts.join(', ') || 'None')
-      .replace('{{remaining_concepts}}', missingConcepts.join(', ') || 'None')
+    const generatorPrompt = renderPromptTemplate(QUESTION_GENERATOR_PROMPT, {
+      '{{subject}}': (scope.subject as string) || 'Configured Subject',
+      '{{multi_subjects}}': multiSubjects,
+      '{{topic}}': question.topic || 'Adaptive Topic',
+      '{{difficulty}}': nextParams.difficulty,
+      '{{context}}': sanitizeUntrustedText(contextTextNext, 6000),
+      '{{candidate_memory_context}}': memoryContextNext,
+      '{{previous_question}}': sanitizeUntrustedText(question.content, 2000),
+      '{{candidate_answer}}': sanitizeUntrustedText(candidateTranscript || 'No answer recorded', 4000),
+      '{{evaluation_summary}}': evaluationSummary,
+      '{{previous_questions}}': sanitizeUntrustedText(previousQuestionsFormatted, 3000),
+      '{{earlier_context}}': sanitizeUntrustedText(
+        nextParams.earlierContextText || 'None (First completed question)',
+        3000
+      ),
+      '{{weak_concepts}}': nextParams.weakConcepts.join(', ') || 'None',
+      '{{remaining_concepts}}': missingConcepts.join(', ') || 'None',
+    })
 
     const { text: nextQResponse } = await generateLLMResponse(
       generatorPrompt + '\n\nReply in strict JSON format.',
@@ -515,6 +578,14 @@ export async function POST(req: NextRequest) {
       currentDifficulty: nextParams.difficulty,
     })
   } catch (error: unknown) {
+    if (claimedAnswerId) {
+      const hasSavedEval = await prisma.answerEvaluation
+        .findUnique({ where: { answerId: claimedAnswerId }, select: { id: true } })
+        .catch(() => null)
+      if (!hasSavedEval) {
+        await prisma.answer.delete({ where: { id: claimedAnswerId } }).catch(() => {})
+      }
+    }
     return handleLLMError(error)
   }
 }

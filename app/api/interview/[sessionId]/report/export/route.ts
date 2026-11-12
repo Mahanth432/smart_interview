@@ -2,14 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/db'
 import { getValidatedAppSession } from '@/lib/auth-server'
 import { formatInterviewerName } from '@/lib/formatters'
-
-function csvEscape(val: unknown): string {
-  const str = String(val ?? '')
-  if (/[",\n\r]/.test(str)) {
-    return `"${str.replace(/"/g, '""')}"`
-  }
-  return str
-}
+import { csvEscape, sanitizeReportForRole } from '@/lib/report-privacy'
 
 export async function GET(
   req: NextRequest,
@@ -51,6 +44,15 @@ export async function GET(
     if (!isOwner) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
+
+    if (userSession.role === 'CANDIDATE' && session.status !== 'completed') {
+      return NextResponse.json(
+        { error: 'Report export is available only after the interview is completed.' },
+        { status: 403 }
+      )
+    }
+
+    const safeReport = sanitizeReportForRole(session.report, userSession.role)
 
     const scope = session.scope as { subject?: string; subjects?: string[]; mode?: string } | null
     const interviewerName = formatInterviewerName(session.interviewer)
@@ -114,7 +116,7 @@ export async function GET(
         email: session.candidate.email,
       },
       interviewer: interviewerName,
-      report: session.report,
+      report: safeReport,
       knowledgeGaps: session.gaps,
       questions: session.questions.map((q) => ({
         questionNumber: q.questionNumber,

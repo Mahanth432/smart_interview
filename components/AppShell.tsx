@@ -4,6 +4,7 @@ import React from 'react'
 import { Sidebar } from './Sidebar'
 import { Header } from './Header'
 import { InterviewStateProvider } from './providers/InterviewStateProvider'
+import { SystemHealthBadge } from './SystemHealthBadge'
 
 interface AppShellProps {
   children: React.ReactNode
@@ -58,10 +59,7 @@ export const AppShell = ({ children, username, role }: AppShellProps) => {
                   LLM + RAG Engine
                 </span>
               </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                <span style={{ width: '6px', height: '6px', borderRadius: '50%', background: '#10b981', display: 'inline-block' }}></span>
-                <span>All systems operational</span>
-              </div>
+              <SystemHealthBadge variant="footer" />
             </>
           ) : (
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>

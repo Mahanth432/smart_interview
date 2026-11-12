@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { Prisma } from '@prisma/client'
-import { getAppSession } from '@/lib/auth'
+import { getValidatedAppSession } from '@/lib/auth-server'
+import { verifySameOrigin } from '@/lib/csrf'
 import prisma from '@/lib/db'
 import { createAuditLog } from '@/lib/audit-log'
+import { enforceRateLimit } from '@/lib/rate-limit'
 import { deleteUserWithCleanup, getUserDeletionPreview } from '@/lib/admin/userDeletion'
 import {
   normalizeUsername,
@@ -26,7 +28,7 @@ export async function GET(
 ) {
   try {
     const response = NextResponse.json({})
-    const session = await getAppSession(request, response)
+    const session = await getValidatedAppSession(request, response)
 
     if (!session?.isLoggedIn || !session.userId) {
       return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 })
@@ -59,8 +61,10 @@ export async function PATCH(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
+    const csrfError = verifySameOrigin(request)
+    if (csrfError) return csrfError
     const response = NextResponse.json({})
-    const session = await getAppSession(request, response)
+    const session = await getValidatedAppSession(request, response)
 
     if (!session?.isLoggedIn || !session.userId) {
       return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 })
@@ -68,6 +72,16 @@ export async function PATCH(
     if (session.role !== 'ADMIN') {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
     }
+
+    const rlError = await enforceRateLimit(
+      {
+        key: `admin:users-id:user:${session.userId}`,
+        limit: 40,
+        windowSeconds: 15 * 60,
+      },
+      'Too many admin user update requests. Please wait before trying again.'
+    )
+    if (rlError) return rlError
 
     const { id } = await context.params
     const targetUserId = parseUserId(id)
@@ -245,8 +259,10 @@ export async function DELETE(
   context: { params: Promise<{ id: string }> }
 ) {
   try {
+    const csrfError = verifySameOrigin(request)
+    if (csrfError) return csrfError
     const response = NextResponse.json({})
-    const session = await getAppSession(request, response)
+    const session = await getValidatedAppSession(request, response)
 
     if (!session?.isLoggedIn || !session.userId) {
       return NextResponse.json({ error: 'Unauthenticated' }, { status: 401 })
@@ -254,6 +270,16 @@ export async function DELETE(
     if (session.role !== 'ADMIN') {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 403 })
     }
+
+    const rlError = await enforceRateLimit(
+      {
+        key: `admin:users-id:user:${session.userId}`,
+        limit: 40,
+        windowSeconds: 15 * 60,
+      },
+      'Too many admin user deletion requests. Please wait before trying again.'
+    )
+    if (rlError) return rlError
 
     const { id } = await context.params
     const targetUserId = parseUserId(id)

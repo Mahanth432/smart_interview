@@ -1,14 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getValidatedAppSession } from '@/lib/auth-server'
+import { verifySameOrigin } from '@/lib/csrf'
 import { transitionSessionLifecycle } from '@/lib/interview/lifecycle'
+import { enforceRateLimit } from '@/lib/rate-limit'
 
 export async function POST(req: NextRequest) {
   try {
+    const csrfError = verifySameOrigin(req)
+    if (csrfError) return csrfError
     const res = NextResponse.json({})
     const userSession = await getValidatedAppSession(req, res)
     if (!userSession?.isLoggedIn || !userSession.userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
+
+    const rlError = await enforceRateLimit(
+      {
+        key: `interview:pause:user:${userSession.userId}`,
+        limit: 40,
+        windowSeconds: 15 * 60,
+      },
+      'Too many pause requests. Please wait before trying again.'
+    )
+    if (rlError) return rlError
 
     const { sessionId } = await req.json()
     if (!sessionId || typeof sessionId !== 'string') {

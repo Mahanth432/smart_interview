@@ -5,6 +5,7 @@ import prisma from '@/lib/db'
 import { hashOtp, generateSecureOtp, OTP_EXPIRATION_MINUTES } from '@/lib/otp'
 import { sendOtpEmail } from '@/lib/mail'
 import { createAuditLog } from '@/lib/audit-log'
+import { verifySameOrigin } from '@/lib/csrf'
 import { checkRateLimit, extractClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import {
   normalizeUsername,
@@ -16,6 +17,9 @@ import {
 
 export async function POST(request: Request) {
   try {
+    const csrfError = verifySameOrigin(request)
+    if (csrfError) return csrfError
+
     const clientIp = extractClientIp(request)
     const ipLimit = await checkRateLimit({
       key: `register:ip:${clientIp}`,
@@ -85,27 +89,13 @@ export async function POST(request: Request) {
       }),
     ])
 
-    if (existingByUsername && (!existingByEmail || existingByUsername.id !== existingByEmail.id)) {
+    // Return a uniform conflict response without disclosing whether email or username exists or its verification state
+    if (existingByUsername || existingByEmail) {
       return NextResponse.json(
-        { error: 'This username is already taken. Please choose a different username.' },
-        { status: 409 }
-      )
-    }
-
-    // Never allow an unauthenticated caller to overwrite an existing unverified account's credentials or username
-    if (existingByEmail) {
-      if (!existingByEmail.emailVerified) {
-        return NextResponse.json(
-          {
-            error:
-              'A pending unverified account already exists for this email. Please verify your email with the OTP code or request a new verification code.',
-          },
-          { status: 409 }
-        )
-      }
-
-      return NextResponse.json(
-        { error: 'An account with this email address already exists. Please log in.' },
+        {
+          error:
+            'Unable to complete registration with these details. Please try a different username/email or sign in if you already have an account.',
+        },
         { status: 409 }
       )
     }
@@ -186,20 +176,13 @@ export async function POST(request: Request) {
     )
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-      const target = Array.isArray(err.meta?.target) ? err.meta.target.join(',') : String(err.meta?.target || '')
-      if (target.includes('username')) {
-        return NextResponse.json(
-          { error: 'This username is already taken. Please choose a different username.' },
-          { status: 409 }
-        )
-      }
-      if (target.includes('email')) {
-        return NextResponse.json(
-          { error: 'An account with this email address already exists. Please log in.' },
-          { status: 409 }
-        )
-      }
-      return NextResponse.json({ error: 'An account with these details already exists.' }, { status: 409 })
+      return NextResponse.json(
+        {
+          error:
+            'Unable to complete registration with these details. Please try a different username/email or sign in if you already have an account.',
+        },
+        { status: 409 }
+      )
     }
     console.error('Registration error:', err)
     return NextResponse.json({ error: 'Internal server error.' }, { status: 500 })

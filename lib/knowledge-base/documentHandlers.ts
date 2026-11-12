@@ -15,6 +15,7 @@ import {
   type StorageScope,
 } from '@/lib/storage/b2'
 import { confirmAndMarkStorageMissing } from './storageReconciliation'
+import { validateFileMagicBytes } from './extractText'
 
 const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024 // 10MB
 const STALE_PROCESSING_MS = 3 * 60 * 1000
@@ -257,8 +258,8 @@ export function validateDocumentDescriptor(params: {
     return { ok: false, error: 'Unsupported file type', status: 400 }
   }
 
-  if (ext && !ALLOWED_EXTENSIONS.has(ext)) {
-    return { ok: false, error: 'Unsupported file extension', status: 400 }
+  if (!ext || !ALLOWED_EXTENSIONS.has(ext)) {
+    return { ok: false, error: 'Unsupported or missing file extension', status: 400 }
   }
 
   const effectiveContentType = mimeAllowed
@@ -299,10 +300,14 @@ export async function handleDocumentUpload(params: {
     return NextResponse.json({ error: validation.error }, { status: validation.status })
   }
 
-  const { originalFilename, fileTypeLabel, effectiveContentType } = validation
+  const { originalFilename, ext, fileTypeLabel, effectiveContentType } = validation
   const size = file.size
 
   const buffer = Buffer.from(await file.arrayBuffer())
+  const magicCheck = validateFileMagicBytes(buffer, ext)
+  if (!magicCheck.ok) {
+    return NextResponse.json({ error: magicCheck.error }, { status: 400 })
+  }
 
   let stored: { storagePath: string; storageProvider: 'b2' | 'local' }
   try {
@@ -468,6 +473,9 @@ export async function initDirectDocumentUpload(params: {
   const storageScope: StorageScope =
     requestedSource === 'ADMIN_MASTER' ? 'admin-kb-docs' : 'knowledge-docs'
 
+  // Opportunistic best-effort cleanup of genuinely expired, unreferenced upload intents
+  cleanupExpiredUploadIntents().catch(() => {})
+
   let presigned: Awaited<ReturnType<typeof createPresignedDocumentUpload>>
   try {
     presigned = await createPresignedDocumentUpload({
@@ -475,6 +483,7 @@ export async function initDirectDocumentUpload(params: {
       userId: params.userId,
       originalFilename: validation.originalFilename,
       contentType: validation.effectiveContentType,
+      contentLength: Math.trunc(params.fileSize),
       expiresInSeconds: 600,
     })
   } catch (err) {
@@ -579,6 +588,10 @@ export async function completeDirectDocumentUpload(params: {
         where: { id: intent.id, status: 'PENDING' },
         data: { status: 'EXPIRED' },
       })
+    }
+    const refCount = await prisma.document.count({ where: { storagePath: intent.storagePath } })
+    if (refCount === 0) {
+      await deleteDocumentObject(intent.storagePath).catch(() => {})
     }
     return NextResponse.json(
       { error: 'Upload URL expired before completion. Please upload the file again.' },
@@ -809,4 +822,37 @@ export async function cancelDirectDocumentUpload(params: {
     success: true,
     status: updated.count > 0 ? targetStatus : intent.status,
   })
+}
+
+/**
+ * Best-effort idempotent sweeper for expired UploadIntents whose B2 objects
+ * were never linked to an active Document record.
+ */
+export async function cleanupExpiredUploadIntents(limit = 20): Promise<number> {
+  const expired = await prisma.uploadIntent.findMany({
+    where: {
+      OR: [
+        { status: 'EXPIRED' },
+        { status: 'PENDING', expiresAt: { lt: new Date(Date.now() - 5 * 60 * 1000) } },
+      ],
+    },
+    select: { id: true, storagePath: true, status: true },
+    take: limit,
+  })
+
+  let cleaned = 0
+  for (const intent of expired) {
+    const refCount = await prisma.document.count({ where: { storagePath: intent.storagePath } })
+    if (refCount === 0) {
+      await deleteDocumentObject(intent.storagePath).catch(() => {})
+    }
+    await prisma.uploadIntent
+      .updateMany({
+        where: { id: intent.id, status: { in: ['PENDING', 'EXPIRED'] } },
+        data: { status: 'CANCELLED' },
+      })
+      .catch(() => {})
+    cleaned += 1
+  }
+  return cleaned
 }

@@ -2,7 +2,7 @@ import prisma from '@/lib/db'
 import { createAuditLog } from '@/lib/audit-log'
 import { DocumentObjectNotFoundError } from '@/lib/storage/b2'
 import { confirmAndMarkStorageMissing } from './storageReconciliation'
-import { extractTextFromFile } from './extractText'
+import { extractDocumentContentFromFile, type ExtractedDocumentContent, type ExtractedPage } from './extractText'
 import { EMBEDDING_DIMENSIONS, generateEmbeddingsBatch } from './embeddings'
 import { getRagRuntimeSettings } from './ragConfig'
 
@@ -14,6 +14,65 @@ export class DocumentStorageMissingError extends Error {
 }
 
 const STALE_PROCESSING_MS = 3 * 60 * 1000
+
+export interface ChunkWithPage {
+  content: string
+  pageNumber: number | null
+}
+
+/**
+ * Split page-aware document text into chunks while mapping each chunk to its
+ * originating 1-based PDF page number (based on the chunk's starting offset).
+ */
+export function splitPagesIntoChunks(
+  pages: ExtractedPage[],
+  chunkSize = 1200,
+  overlap = 200
+): ChunkWithPage[] {
+  const nonEmptyPages = pages.filter((p) => p.text.trim().length > 0)
+  if (nonEmptyPages.length === 0) return []
+
+  const pageRanges: Array<{ pageNumber: number; start: number; end: number }> = []
+  let combined = ''
+  for (const page of nonEmptyPages) {
+    if (combined.length > 0) combined += '\n'
+    const start = combined.length
+    combined += page.text
+    pageRanges.push({ pageNumber: page.pageNumber, start, end: combined.length })
+  }
+
+  const safeSize = Math.max(200, Math.floor(chunkSize))
+  const safeOverlap = Math.max(0, Math.min(Math.floor(overlap), Math.floor(safeSize / 2)))
+  const chunks: ChunkWithPage[] = []
+  let start = 0
+  let pageCursor = 0
+
+  while (start < combined.length) {
+    let end = Math.min(start + safeSize, combined.length)
+    if (end < combined.length) {
+      const slice = combined.slice(start, end)
+      const lastBreak = Math.max(slice.lastIndexOf('\n'), slice.lastIndexOf('. '), slice.lastIndexOf(' '))
+      if (lastBreak > Math.floor(safeSize * 0.6)) {
+        end = start + lastBreak + 1
+      }
+    }
+    const piece = combined.slice(start, end).trim()
+    if (piece.length > 0) {
+      while (pageCursor < pageRanges.length - 1 && pageRanges[pageCursor].end <= start) {
+        pageCursor += 1
+      }
+      const matchedPage =
+        pageRanges.find((r) => start >= r.start && start <= r.end)?.pageNumber ??
+        pageRanges[pageCursor]?.pageNumber ??
+        null
+      chunks.push({ content: piece, pageNumber: matchedPage })
+    }
+    if (end >= combined.length) break
+    const nextStart = end - safeOverlap
+    start = nextStart > start ? nextStart : end
+  }
+  return chunks
+}
 
 // Split text into overlapping chunks respecting configured size/overlap and whitespace boundaries when possible
 export function splitIntoChunks(text: string, chunkSize = 1200, overlap = 200): string[] {
@@ -93,7 +152,11 @@ export interface ProcessDocumentOptions {
   force?: boolean
   actingUserId?: number | null
   actingUsername?: string | null
-  extractFn?: (storagePath: string, originalFilename?: string, fileType?: string) => Promise<string>
+  extractFn?: (
+    storagePath: string,
+    originalFilename?: string,
+    fileType?: string
+  ) => Promise<string | ExtractedDocumentContent>
   embedFn?: (texts: string[]) => Promise<number[][]>
 }
 
@@ -113,7 +176,7 @@ export async function processDocument(
   options: ProcessDocumentOptions = {}
 ): Promise<ProcessDocumentResult> {
   const force = Boolean(options.force)
-  const extractFn = options.extractFn ?? extractTextFromFile
+  const extractFn = options.extractFn ?? extractDocumentContentFromFile
   const embedFn = options.embedFn ?? generateEmbeddingsBatch
 
   const doc = await prisma.document.findUnique({ where: { id } })
@@ -162,7 +225,20 @@ export async function processDocument(
     // Phase 1: Extract text and split into overlapping chunks using admin-configured RAG chunking
     const ragSettings = await getRagRuntimeSettings()
     const extracted = await extractFn(doc.storagePath, doc.originalFilename, doc.fileType)
-    const chunkTexts = splitIntoChunks(extracted, ragSettings.chunkSize, ragSettings.chunkOverlap)
+    const chunksWithPages: ChunkWithPage[] =
+      typeof extracted === 'string'
+        ? splitIntoChunks(extracted, ragSettings.chunkSize, ragSettings.chunkOverlap).map((content) => ({
+            content,
+            pageNumber: null,
+          }))
+        : extracted.pages && extracted.pages.length > 0
+          ? splitPagesIntoChunks(extracted.pages, ragSettings.chunkSize, ragSettings.chunkOverlap)
+          : splitIntoChunks(extracted.text, ragSettings.chunkSize, ragSettings.chunkOverlap).map((content) => ({
+              content,
+              pageNumber: null,
+            }))
+    const chunkTexts = chunksWithPages.map((c) => c.content)
+    const chunkPages = chunksWithPages.map((c) => c.pageNumber)
 
     if (chunkTexts.length === 0) {
       throw new Error('Text splitting produced zero chunks')
@@ -188,6 +264,9 @@ export async function processDocument(
       if (vec.some((n) => !Number.isFinite(n))) {
         throw new Error(`Non-finite embedding value at chunk ${idx}`)
       }
+      if (vec.every((n) => n === 0)) {
+        throw new Error(`Zero-norm embedding vector at chunk ${idx}`)
+      }
       return `[${vec.join(',')}]`
     })
     const chunkIndices = chunkTexts.map((_, idx) => idx)
@@ -198,15 +277,16 @@ export async function processDocument(
     await prisma.$transaction([
       prisma.documentChunk.deleteMany({ where: { documentId: id } }),
       prisma.$executeRaw`
-        INSERT INTO "DocumentChunk" ("documentId", "content", "chunkIndex", "sourceType", "topic", "createdAt", "embedding")
-        SELECT ${id}::int, u.content, u.chunk_index, u.source_type, u.topic, NOW(), u.embedding::vector(384)
+        INSERT INTO "DocumentChunk" ("documentId", "content", "chunkIndex", "pageNumber", "sourceType", "topic", "createdAt", "embedding")
+        SELECT ${id}::int, u.content, u.chunk_index, u.page_number, u.source_type, u.topic, NOW(), u.embedding::vector(384)
         FROM UNNEST(
           ${chunkTexts}::text[],
           ${chunkIndices}::int[],
+          ${chunkPages}::int[],
           ${chunkSourceTypes}::text[],
           ${chunkTopics}::text[],
           ${vectorStrings}::text[]
-        ) AS u(content, chunk_index, source_type, topic, embedding)
+        ) AS u(content, chunk_index, page_number, source_type, topic, embedding)
       `,
       prisma.document.update({
         where: { id },

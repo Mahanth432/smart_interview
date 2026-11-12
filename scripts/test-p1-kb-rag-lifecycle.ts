@@ -125,6 +125,9 @@ async function main() {
     })
 
     await check('POST /api/interview/pause and /api/interview/abandon enforce ownership and transitions', async () => {
+      prisma.$queryRaw = (async () => [
+        { count: 1, resetAt: new Date(Date.now() + 60_000) },
+      ]) as typeof prisma.$queryRaw
       const { POST: pausePost } = await import('../app/api/interview/pause/route')
       const { POST: abandonPost } = await import('../app/api/interview/abandon/route')
 
@@ -143,17 +146,20 @@ async function main() {
         candidate: { userId: null },
       })) as unknown as typeof prisma.interviewSession.findUnique
 
+      const origSessionFindMany = prisma.interviewSession.findMany
+      const origSessionUpdateMany = prisma.interviewSession.updateMany
       let lastStatusWritten = ''
-      prisma.interviewSession.update = (async ({ data }: { data: { status: string } }) => {
+      prisma.interviewSession.findMany = (async () => []) as unknown as typeof prisma.interviewSession.findMany
+      prisma.interviewSession.updateMany = (async ({ data }: { data: { status: string } }) => {
         lastStatusWritten = data.status
-        return { id: 'sess-1', status: data.status, pausedAt: new Date(), endedAt: new Date() }
-      }) as unknown as typeof prisma.interviewSession.update
+        return { count: 1 }
+      }) as unknown as typeof prisma.interviewSession.updateMany
 
       const cookie = await makeCookie(77, 'INTERVIEWER')
       const pauseRes = await pausePost(
         new NextRequest('http://localhost:3000/api/interview/pause', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', cookie },
+          headers: { 'Content-Type': 'application/json', origin: 'http://localhost:3000', cookie },
           body: JSON.stringify({ sessionId: 'sess-1' }),
         })
       )
@@ -163,12 +169,14 @@ async function main() {
       const abandonRes = await abandonPost(
         new NextRequest('http://localhost:3000/api/interview/abandon', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json', cookie },
+          headers: { 'Content-Type': 'application/json', origin: 'http://localhost:3000', cookie },
           body: JSON.stringify({ sessionId: 'sess-1' }),
         })
       )
       assert.equal(abandonRes.status, 200)
       assert.equal(lastStatusWritten, 'abandoned')
+      prisma.interviewSession.findMany = origSessionFindMany
+      prisma.interviewSession.updateMany = origSessionUpdateMany
     })
 
     await check('POST /api/knowledge-base/fetch filters to PROCESSED docs only and prunes stale synced copies', async () => {
@@ -203,7 +211,7 @@ async function main() {
       const res = await fetchKbPost(
         new Request('http://localhost:3000/api/knowledge-base/fetch', {
           method: 'POST',
-          headers: { cookie },
+          headers: { origin: 'http://localhost:3000', cookie },
         })
       )
       assert.equal(res.status, 200)
@@ -216,6 +224,14 @@ async function main() {
     await check('DELETE /api/admin/knowledge-base/[id] removes SYNCED_FROM_ADMIN copies before B2 ref check', async () => {
       const { DELETE: deleteAdminKb } = await import('../app/api/admin/knowledge-base/[id]/route')
       let syncedDeletedWhere: Record<string, unknown> | null = null
+
+      prisma.user.findUnique = (async () => ({
+        id: 1,
+        username: 'u1',
+        role: 'ADMIN',
+        tokenVersion: 1,
+        emailVerified: true,
+      })) as unknown as typeof prisma.user.findUnique
 
       prisma.document.findUnique = (async () => ({
         id: 50,
@@ -239,7 +255,7 @@ async function main() {
       const res = await deleteAdminKb(
         new NextRequest('http://localhost:3000/api/admin/knowledge-base/50', {
           method: 'DELETE',
-          headers: { cookie },
+          headers: { origin: 'http://localhost:3000', cookie },
         }),
         { params: Promise.resolve({ id: '50' }) }
       )

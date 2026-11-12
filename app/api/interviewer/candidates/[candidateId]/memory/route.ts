@@ -47,7 +47,10 @@ export async function GET(
       await refreshRevisionRecommendations(candidate.id, session.userId)
     }
 
-    const snapshot = await getCandidateLearningSnapshot(candidate.id)
+    const snapshot = await getCandidateLearningSnapshot(
+      candidate.id,
+      session.role === 'ADMIN' ? undefined : { interviewerId: session.userId }
+    )
     return NextResponse.json({
       candidate: { id: candidate.id, name: candidate.name, email: candidate.email },
       ...snapshot,

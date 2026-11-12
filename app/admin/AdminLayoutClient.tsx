@@ -19,8 +19,16 @@ export default function AdminLayoutClient({
   const [collapsed, setCollapsed] = useState(false)
 
   const handleLogout = async () => {
-    await fetch('/api/auth/logout', { method: 'POST' })
-    router.push('/login')
+    try {
+      const res = await fetch('/api/auth/logout', { method: 'POST' })
+      if (!res.ok) {
+        window.alert('Unable to sign out cleanly. Please refresh and try again.')
+        return
+      }
+      router.push('/login')
+    } catch {
+      window.alert('Network error while signing out.')
+    }
   }
 
   const navItems = [

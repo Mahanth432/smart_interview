@@ -170,15 +170,40 @@ async function main() {
       prisma.document.findMany = (async () => [
         { id: 55, name: 'Computer Networks Unit 3', subject: 'Computer Networks' },
       ]) as unknown as typeof prisma.document.findMany
+      const origTx = prisma.$transaction
+      const origRevFindMany = prisma.revisionRecommendation.findMany
+      const origRevCreateMany = prisma.revisionRecommendation.createMany
+      let createdBatch: Array<Record<string, unknown>> = []
+      prisma.revisionRecommendation.findMany = (async () => createdBatch) as unknown as typeof prisma.revisionRecommendation.findMany
       prisma.revisionRecommendation.deleteMany = (async () => ({ count: 0 })) as unknown as typeof prisma.revisionRecommendation.deleteMany
-      prisma.revisionRecommendation.create = (async ({ data }: { data: Record<string, unknown> }) => data) as unknown as typeof prisma.revisionRecommendation.create
+      prisma.revisionRecommendation.createMany = (async ({ data }: { data: Array<Record<string, unknown>> }) => {
+        createdBatch = data
+        return { count: data.length }
+      }) as unknown as typeof prisma.revisionRecommendation.createMany
+      prisma.$transaction = (async (fn: (tx: unknown) => Promise<unknown>) =>
+        fn({
+          revisionRecommendation: {
+            deleteMany: prisma.revisionRecommendation.deleteMany,
+            createMany: prisma.revisionRecommendation.createMany,
+          },
+        })) as unknown as typeof prisma.$transaction
 
-      const recs = await refreshRevisionRecommendations('cand-1', 77)
-      assert.equal(recs.length, 1)
-      assert.equal((recs[0] as { linkedDocumentId: number | null }).linkedDocumentId, 55)
+      try {
+        const recs = await refreshRevisionRecommendations('cand-1', 77)
+        assert.equal(recs.length, 1)
+        assert.equal((recs[0] as { linkedDocumentId: number | null }).linkedDocumentId, 55)
+      } finally {
+        prisma.$transaction = origTx
+        prisma.revisionRecommendation.findMany = origRevFindMany
+        prisma.revisionRecommendation.createMany = origRevCreateMany
+      }
     })
 
     await check('PATCH /api/interview/[sessionId]/report blocks CANDIDATE (403) and preserves AI originals', async () => {
+      const origQueryRaw = prisma.$queryRaw
+      prisma.$queryRaw = (async () => [
+        { count: 1, resetAt: new Date(Date.now() + 60_000) },
+      ]) as typeof prisma.$queryRaw
       const { PATCH: patchReport } = await import('../app/api/interview/[sessionId]/report/route')
       prisma.user.findUnique = (async ({ where }: { where: { id: number } }) => ({
         id: where.id,
@@ -192,7 +217,7 @@ async function main() {
       const resForbidden = await patchReport(
         new NextRequest('http://localhost:3000/api/interview/sess-1/report', {
           method: 'PATCH',
-          headers: { 'Content-Type': 'application/json', cookie: candCookie },
+          headers: { 'Content-Type': 'application/json', origin: 'http://localhost:3000', cookie: candCookie },
           body: JSON.stringify({ executiveSummary: 'Tamper' }),
         }),
         { params: Promise.resolve({ sessionId: 'sess-1' }) }
@@ -225,7 +250,7 @@ async function main() {
       const resOk = await patchReport(
         new NextRequest('http://localhost:3000/api/interview/sess-1/report', {
           method: 'PATCH',
-          headers: { 'Content-Type': 'application/json', cookie: intCookie },
+          headers: { 'Content-Type': 'application/json', origin: 'http://localhost:3000', cookie: intCookie },
           body: JSON.stringify({ executiveSummary: 'Edited by interviewer', interviewerNotes: 'Strong comms' }),
         }),
         { params: Promise.resolve({ sessionId: 'sess-1' }) }
@@ -234,6 +259,7 @@ async function main() {
       assert.equal(updatedData?.['aiExecutiveSummary'], 'Original AI summary')
       assert.equal(updatedData?.['executiveSummary'], 'Edited by interviewer')
       assert.equal(updatedData?.['editedByUserId'], 77)
+      prisma.$queryRaw = origQueryRaw
     })
 
     await check('GET /api/interview/[sessionId]/report/export returns CSV and JSON attachments', async () => {

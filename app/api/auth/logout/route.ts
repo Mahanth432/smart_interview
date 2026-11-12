@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { getAppSession, clearSessionFields, getSessionOptions } from '@/lib/auth'
 import { createAuditLog } from '@/lib/audit-log'
 import { verifySameOrigin } from '@/lib/csrf'
+import { enforceRateLimit, extractClientIp } from '@/lib/rate-limit'
 
 export async function POST(request: Request) {
   const csrfError = verifySameOrigin(request)
@@ -11,6 +12,20 @@ export async function POST(request: Request) {
 
   const response = NextResponse.json({ success: true, redirect: '/login' })
   const session = await getAppSession(request, response)
+
+  const rateLimitKey = session?.userId
+    ? `logout:user:${session.userId}`
+    : `logout:ip:${extractClientIp(request)}`
+
+  const rlError = await enforceRateLimit(
+    {
+      key: rateLimitKey,
+      limit: 60,
+      windowSeconds: 15 * 60,
+    },
+    'Too many logout requests. Please wait before trying again.'
+  )
+  if (rlError) return rlError
 
   if (session?.userId) {
     createAuditLog({

@@ -27,6 +27,8 @@ model User {
   otps          OtpVerification[]
   uploadIntents       UploadIntent[]
   passwordResetTokens PasswordResetToken[]
+
+  @@index([role])
 }
 
 enum DocumentStorageStatus {
@@ -73,6 +75,7 @@ model Document {
   @@index([adminDocId])
   @@index([storageStatus])
   @@index([storagePath])
+  @@index([docSource, storageStatus, status])
 }
 
 model AppSettings {
@@ -140,6 +143,8 @@ model InterviewSession {
   @@index([candidateId])
   @@index([interviewerId])
   @@index([status])
+  @@index([startedAt])
+  @@index([interviewerId, startedAt])
 }
 
 model Question {
@@ -158,7 +163,9 @@ model Question {
   answer           Answer?
   session          InterviewSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
 
+  @@unique([sessionId, questionNumber])
   @@index([sessionId])
+  @@index([askedAt])
 }
 
 model Answer {

@@ -1,14 +1,29 @@
+import { Prisma } from '@prisma/client'
 import prisma from '@/lib/db'
 import { createAuditLog } from '@/lib/audit-log'
 
 export const STALE_SESSION_HOURS = 24
+export const STALE_FINALIZING_MINUTES = 5
 
 /**
- * Marks untouched active/paused sessions older than threshold as 'abandoned'
- * so abandoned sessions never remain indefinitely active.
+ * Marks untouched active/paused sessions older than threshold as 'abandoned',
+ * and recovers stuck 'finalizing' sessions older than 5 minutes back to 'active'.
  */
 export async function expireStaleSessions(hoursThreshold = STALE_SESSION_HOURS): Promise<number> {
   const cutoff = new Date(Date.now() - Math.max(1, hoursThreshold) * 60 * 60 * 1000)
+  const finalizingCutoff = new Date(Date.now() - STALE_FINALIZING_MINUTES * 60 * 1000)
+
+  // Recover crashed /end finalizations safely
+  await prisma.interviewSession
+    .updateMany({
+      where: {
+        status: 'finalizing',
+        startedAt: { lt: finalizingCutoff },
+        report: { is: null },
+      },
+      data: { status: 'active' },
+    })
+    .catch(() => {})
 
   const stale = await prisma.interviewSession.findMany({
     where: {
@@ -18,6 +33,7 @@ export async function expireStaleSessions(hoursThreshold = STALE_SESSION_HOURS):
       questions: { none: { askedAt: { gte: cutoff } } },
     },
     select: { id: true },
+    take: 200,
   })
 
   if (stale.length === 0) return 0
@@ -30,6 +46,7 @@ export async function expireStaleSessions(hoursThreshold = STALE_SESSION_HOURS):
     data: {
       status: 'abandoned',
       endedAt: new Date(),
+      pendingSuggestions: Prisma.DbNull,
     },
   })
 
@@ -43,6 +60,8 @@ export async function transitionSessionLifecycle(params: {
   actorRole?: string | null
   action: 'pause' | 'resume' | 'abandon'
 }) {
+  await expireStaleSessions().catch(() => {})
+
   const session = await prisma.interviewSession.findUnique({
     where: { id: params.sessionId },
     include: { candidate: { select: { userId: true } } },
@@ -61,21 +80,51 @@ export async function transitionSessionLifecycle(params: {
     return { ok: false as const, status: 403, error: 'Unauthorized access to session' }
   }
 
-  if (session.status === 'completed' || session.status === 'abandoned') {
+  if (session.status === 'completed') {
     return {
       ok: false as const,
       status: 409,
-      error: `Cannot ${params.action} a session that is already ${session.status}.`,
+      error: `Cannot ${params.action} a session that is already completed.`,
+    }
+  }
+
+  if (session.status === 'abandoned') {
+    if (params.action === 'abandon') {
+      return {
+        ok: true as const,
+        session: { id: session.id, status: session.status, endedAt: session.endedAt },
+      }
+    }
+    return {
+      ok: false as const,
+      status: 409,
+      error: `Cannot ${params.action} a session that is already abandoned.`,
+    }
+  }
+
+  if (session.status === 'finalizing') {
+    return {
+      ok: false as const,
+      status: 409,
+      error: 'Session finalization is currently in progress.',
     }
   }
 
   if (params.action === 'pause') {
+    if (session.status === 'paused') {
+      return {
+        ok: true as const,
+        session: { id: session.id, status: session.status, pausedAt: session.pausedAt },
+      }
+    }
     const now = new Date()
-    const updated = await prisma.interviewSession.update({
-      where: { id: session.id },
+    const claim = await prisma.interviewSession.updateMany({
+      where: { id: session.id, status: 'active' },
       data: { status: 'paused', pausedAt: now },
-      select: { id: true, status: true, pausedAt: true },
     })
+    if (claim.count === 0) {
+      return { ok: false as const, status: 409, error: 'Session state changed concurrently.' }
+    }
     createAuditLog({
       userId: params.actorUserId,
       username: params.actorUsername ?? undefined,
@@ -83,24 +132,34 @@ export async function transitionSessionLifecycle(params: {
       entityType: 'InterviewSession',
       entityId: session.id,
     })
-    return { ok: true as const, session: updated }
+    return { ok: true as const, session: { id: session.id, status: 'paused', pausedAt: now } }
   }
 
   if (params.action === 'resume') {
-    const updated = await prisma.interviewSession.update({
-      where: { id: session.id },
+    if (session.status === 'active') {
+      return {
+        ok: true as const,
+        session: { id: session.id, status: session.status, pausedAt: session.pausedAt },
+      }
+    }
+    const claim = await prisma.interviewSession.updateMany({
+      where: { id: session.id, status: 'paused' },
       data: { status: 'active' },
-      select: { id: true, status: true, pausedAt: true },
     })
-    return { ok: true as const, session: updated }
+    if (claim.count === 0) {
+      return { ok: false as const, status: 409, error: 'Session state changed concurrently.' }
+    }
+    return { ok: true as const, session: { id: session.id, status: 'active', pausedAt: session.pausedAt } }
   }
 
   const now = new Date()
-  const updated = await prisma.interviewSession.update({
-    where: { id: session.id },
-    data: { status: 'abandoned', endedAt: now, pendingSuggestions: undefined },
-    select: { id: true, status: true, endedAt: true },
+  const claim = await prisma.interviewSession.updateMany({
+    where: { id: session.id, status: { in: ['active', 'paused'] } },
+    data: { status: 'abandoned', endedAt: now, pendingSuggestions: Prisma.DbNull },
   })
+  if (claim.count === 0) {
+    return { ok: false as const, status: 409, error: 'Session state changed concurrently.' }
+  }
   createAuditLog({
     userId: params.actorUserId,
     username: params.actorUsername ?? undefined,
@@ -108,5 +167,5 @@ export async function transitionSessionLifecycle(params: {
     entityType: 'InterviewSession',
     entityId: session.id,
   })
-  return { ok: true as const, session: updated }
+  return { ok: true as const, session: { id: session.id, status: 'abandoned', endedAt: now } }
 }

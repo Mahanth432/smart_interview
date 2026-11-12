@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs'
 import prisma from '@/lib/db'
 import { sendOtpEmail } from '@/lib/mail'
 import { createAuditLog } from '@/lib/audit-log'
+import { verifySameOrigin } from '@/lib/csrf'
 import { checkEmailOtpQuota, issueOtpForEmail, verifyAndConsumeOtp } from '@/lib/otp-store'
 import { checkRateLimit, extractClientIp, rateLimitResponse } from '@/lib/rate-limit'
 import { normalizeEmail, validateEmail, validatePasswordStrength } from '@/lib/validation/user'
@@ -16,6 +17,9 @@ const GENERIC_OTP_SENT_RESPONSE = {
 
 export async function POST(request: Request) {
   try {
+    const csrfError = verifySameOrigin(request)
+    if (csrfError) return csrfError
+
     const clientIp = extractClientIp(request)
     const ipLimit = await checkRateLimit({
       key: `set-password:ip:${clientIp}`,

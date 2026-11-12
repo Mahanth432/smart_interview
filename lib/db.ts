@@ -13,6 +13,9 @@ function buildNormalizedDatabaseUrl(): string | undefined {
       if (!parsed.searchParams.has('pool_timeout')) {
         parsed.searchParams.set('pool_timeout', '30')
       }
+      if (!parsed.searchParams.has('connection_limit') && parsed.hostname.includes('-pooler.')) {
+        parsed.searchParams.set('connection_limit', '5')
+      }
     }
     return parsed.toString()
   } catch {

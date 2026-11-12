@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server'
-import { getAppSession } from '@/lib/auth'
+import { getValidatedAppSession } from '@/lib/auth-server'
+import { verifySameOrigin } from '@/lib/csrf'
+import { enforceRateLimit } from '@/lib/rate-limit'
 import prisma from '@/lib/db'
 import {
   handleDocumentUpload,
@@ -18,7 +20,7 @@ export async function GET(request: Request) {
   const t0 = performance.now()
   try {
     const response = NextResponse.json({})
-    const session = await getAppSession(request, response)
+    const session = await getValidatedAppSession(request, response)
 
     if (!session?.isLoggedIn || !session.userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -47,8 +49,11 @@ export async function GET(request: Request) {
       }
     }
 
-    // Build base where clause — always filter by userId (ownership)
-    const where: { userId: number } = { userId: session.userId }
+    // Build base where clause — always filter by userId (ownership) and exclude ADMIN_MASTER
+    const where = {
+      userId: session.userId,
+      docSource: { in: ['INTERVIEWER_PRIVATE', 'SYNCED_FROM_ADMIN'] },
+    }
 
     const tQuery0 = performance.now()
     const documents = await prisma.document.findMany({
@@ -104,8 +109,10 @@ export async function GET(request: Request) {
 // POST /api/documents — upload and process a document (always INTERVIEWER_PRIVATE)
 export async function POST(request: Request) {
   try {
+    const csrfError = verifySameOrigin(request)
+    if (csrfError) return csrfError
     const response = NextResponse.json({})
-    const session = await getAppSession(request, response)
+    const session = await getValidatedAppSession(request, response)
 
     if (!session?.isLoggedIn || !session.userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
@@ -113,6 +120,16 @@ export async function POST(request: Request) {
     if (session.role === 'CANDIDATE') {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
+
+    const rlError = await enforceRateLimit(
+      {
+        key: `documents:write:user:${session.userId}`,
+        limit: 30,
+        windowSeconds: 15 * 60,
+      },
+      'Too many document upload requests. Please wait before trying again.'
+    )
+    if (rlError) return rlError
 
     return await handleDocumentUpload({
       request,

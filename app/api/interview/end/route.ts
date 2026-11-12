@@ -3,7 +3,10 @@ import { Prisma } from '@prisma/client'
 import prisma from '@/lib/db'
 import { generateLLMResponse } from '@/lib/llm'
 import { getValidatedAppSession } from '@/lib/auth-server'
+import { verifySameOrigin } from '@/lib/csrf'
+import { expireStaleSessions } from '@/lib/interview/lifecycle'
 import { refreshRevisionRecommendations } from '@/lib/interview/memory'
+import { renderPromptTemplate } from '@/lib/llm/prompts'
 import { checkRateLimit, rateLimitResponse } from '@/lib/rate-limit'
 
 export const maxDuration = 60
@@ -33,7 +36,12 @@ function toStringList(val: unknown): string[] {
 }
 
 export async function POST(req: NextRequest) {
+  let lockedSessionId: string | null = null
+  let previousStatus: string = 'active'
   try {
+    const csrfError = verifySameOrigin(req)
+    if (csrfError) return csrfError
+
     const res = NextResponse.json({})
     const userSession = await getValidatedAppSession(req, res)
     if (!userSession?.isLoggedIn || !userSession.userId) {
@@ -76,6 +84,8 @@ export async function POST(req: NextRequest) {
 
     if (!isOwner) return NextResponse.json({ error: 'Not found or unauthorized' }, { status: 404 })
 
+    await expireStaleSessions().catch(() => {})
+
     // Idempotency guard: if report already exists, return it cleanly without P2002 or extra LLM calls
     if (session.report) {
       if (session.status !== 'completed') {
@@ -91,6 +101,30 @@ export async function POST(req: NextRequest) {
         report: session.report,
       })
     }
+
+    if (session.status === 'abandoned') {
+      return NextResponse.json(
+        { error: 'Cannot finalize an abandoned interview session.' },
+        { status: 409 }
+      )
+    }
+
+    // Atomic concurrency lock: claim session for finalization across serverless workers
+    previousStatus = session.status === 'paused' ? 'paused' : 'active'
+    const lockClaim = await prisma.interviewSession.updateMany({
+      where: {
+        id: session.id,
+        status: { in: ['active', 'paused'] },
+      },
+      data: { status: 'finalizing' },
+    })
+    if (lockClaim.count === 0) {
+      return NextResponse.json(
+        { error: 'Interview finalization is already in progress.' },
+        { status: 409 }
+      )
+    }
+    lockedSessionId = session.id
 
     const evaluatedQuestions = session.questions.filter((q) => q.answer?.evaluation)
     const avgScore =
@@ -144,12 +178,13 @@ export async function POST(req: NextRequest) {
         ? forceProvider
         : undefined
 
-    const prompt = REPORT_GENERATOR_PROMPT
-      .replace('{{totalQuestions}}', session.questions.length.toString())
-      .replace('{{evaluatedQuestions}}', evaluatedQuestions.length.toString())
-      .replace('{{averageScore}}', avgScore.toFixed(2))
-      .replace('{{topicBreakdown}}', topicBreakdownText)
-      .replace('{{gaps}}', gapTexts)
+    const prompt = renderPromptTemplate(REPORT_GENERATOR_PROMPT, {
+      '{{totalQuestions}}': session.questions.length.toString(),
+      '{{evaluatedQuestions}}': evaluatedQuestions.length.toString(),
+      '{{averageScore}}': avgScore.toFixed(2),
+      '{{topicBreakdown}}': topicBreakdownText,
+      '{{gaps}}': gapTexts,
+    })
 
     const { text: reportRes } = await generateLLMResponse(
       prompt + '\n\nOutput JSON only.',
@@ -238,6 +273,14 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({ success: true, reportId: report.id, report })
   } catch (error: unknown) {
+    if (lockedSessionId) {
+      await prisma.interviewSession
+        .updateMany({
+          where: { id: lockedSessionId, status: 'finalizing' },
+          data: { status: previousStatus },
+        })
+        .catch(() => {})
+    }
     console.error('End interview error:', error)
     const { handleLLMError } = await import('@/lib/llm')
     return handleLLMError(error)

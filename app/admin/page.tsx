@@ -1,5 +1,5 @@
 import React from 'react'
-import prisma from '@/lib/db'
+import prisma, { withDbRetry } from '@/lib/db'
 import Icon from '@/components/Icon'
 import Link from 'next/link'
 import { AdminChartsWrapper } from '@/components/admin/AdminChartsWrapper'
@@ -22,37 +22,43 @@ export default async function AdminDashboardPage() {
     scoreAgg,
     totalDocuments,
     recentSessions,
-    weekSessions,
+    weekSessionCounts,
     technicalCount,
     behavioralCount,
-  ] = await Promise.all([
-    prisma.user.count(),
-    prisma.user.count({ where: { role: 'INTERVIEWER' } }),
-    prisma.candidate.count(),
-    prisma.interviewSession.count(),
-    prisma.interviewSession.count({ where: { status: 'completed' } }),
-    prisma.interviewSession.count({ where: { status: { in: ['active', 'paused'] } } }),
-    prisma.interviewSession.aggregate({
-      where: { score: { not: null } },
-      _avg: { score: true },
-    }),
-    prisma.document.count({ where: { storageStatus: 'AVAILABLE' } }),
-    prisma.interviewSession.findMany({
-      take: 6,
-      orderBy: { startedAt: 'desc' },
-      include: {
-        candidate: { select: { name: true, email: true } },
-        interviewer: { select: { username: true } },
-        report: { select: { id: true, overallScore: true } },
-      },
-    }),
-    prisma.interviewSession.findMany({
-      where: { startedAt: { gte: sevenDaysAgo } },
-      select: { startedAt: true },
-    }),
-    prisma.interviewSession.count({ where: { interviewType: { contains: 'technical', mode: 'insensitive' } } }),
-    prisma.interviewSession.count({ where: { interviewType: { contains: 'behavioral', mode: 'insensitive' } } }),
-  ])
+  ] = await withDbRetry(() =>
+    Promise.all([
+      prisma.user.count(),
+      prisma.user.count({ where: { role: 'INTERVIEWER' } }),
+      prisma.candidate.count(),
+      prisma.interviewSession.count(),
+      prisma.interviewSession.count({ where: { status: 'completed' } }),
+      prisma.interviewSession.count({ where: { status: { in: ['active', 'paused'] } } }),
+      prisma.interviewSession.aggregate({
+        where: { score: { not: null } },
+        _avg: { score: true },
+      }),
+      prisma.document.count({ where: { storageStatus: 'AVAILABLE' } }),
+      prisma.interviewSession.findMany({
+        take: 6,
+        orderBy: { startedAt: 'desc' },
+        include: {
+          candidate: { select: { name: true, email: true } },
+          interviewer: { select: { username: true } },
+          report: { select: { id: true, overallScore: true } },
+        },
+      }),
+      prisma.$queryRaw<Array<{ day: string; count: bigint }>>`
+        SELECT
+          TO_CHAR("startedAt" AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day,
+          COUNT(*)::bigint AS count
+        FROM "InterviewSession"
+        WHERE "startedAt" >= ${sevenDaysAgo}
+        GROUP BY 1
+      `,
+      prisma.interviewSession.count({ where: { interviewType: { contains: 'technical', mode: 'insensitive' } } }),
+      prisma.interviewSession.count({ where: { interviewType: { contains: 'behavioral', mode: 'insensitive' } } }),
+    ])
+  )
   const tQueryEnd = performance.now()
 
   if (process.env.NODE_ENV === 'development') {
@@ -64,17 +70,15 @@ export default async function AdminDashboardPage() {
   const otherStatusCount = Math.max(0, totalInterviews - completedInterviews - activeInterviews)
 
   // Last 7 days activity trend from real database sessions
+  const weekCountsByDay = new Map(weekSessionCounts.map((row) => [row.day, Number(row.count)]))
   const now = new Date()
   const days: { label: string; count: number }[] = []
   for (let i = 6; i >= 0; i--) {
-    const d = new Date()
-    d.setDate(now.getDate() - i)
-    const dayStr = d.toLocaleDateString('en-US', { weekday: 'short' })
-    const dayCount = weekSessions.filter(s => {
-      const sDate = new Date(s.startedAt)
-      return sDate.toDateString() === d.toDateString()
-    }).length
-    days.push({ label: dayStr, count: dayCount })
+    const d = new Date(now)
+    d.setUTCDate(d.getUTCDate() - i)
+    const dayKey = d.toISOString().split('T')[0]
+    const dayStr = d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' })
+    days.push({ label: dayStr, count: weekCountsByDay.get(dayKey) ?? 0 })
   }
 
   // Type proportions for striped progress cards
@@ -161,7 +165,7 @@ export default async function AdminDashboardPage() {
       </div>
 
       {/* Main Feature Cards Grid: Payments-style on Left + Gross Volume-style on Right */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(420px, 1fr))', gap: '1.5rem', marginBottom: '1.75rem' }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 340px), 1fr))', gap: '1.5rem', marginBottom: '1.75rem' }}>
         {/* Left Feature Card: Interview Volume & Stepped Analysis */}
         <div className="zentra-card" style={{ display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
           <div>
@@ -170,7 +174,9 @@ export default async function AdminDashboardPage() {
                 <h2 className="zentra-card-title">Interview Volume &amp; Conversion</h2>
                 <span style={{ fontSize: '0.8rem', color: 'var(--zentra-text-muted)' }}>Funnel across evaluation lifecycle</span>
               </div>
-              <span className="zentra-dot-menu">&bull;&bull;&bull;</span>
+              <Link href="/admin/analytics" style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--zentra-text-muted)', textDecoration: 'none' }}>
+                Analytics &rarr;
+              </Link>
             </div>
 
             {/* Micro Columns Row */}
@@ -205,15 +211,22 @@ export default async function AdminDashboardPage() {
             </div>
           </div>
 
-          {/* Zentra Interactive Prompt Explorer Bar */}
+          {/* Quick Navigation Explorer Bar */}
           <div className="zentra-prompt-bar">
             <div className="zentra-prompt-title">
-              <Icon name="smart_toy" size={16} />
-              <span>What would you like to explore next?</span>
+              <Icon name="explore" size={16} />
+              <span>Quick Actions</span>
             </div>
-            <div className="zentra-prompt-input-box">
-              <span style={{ color: 'var(--zentra-text-dim)' }}>&gt;</span>
-              <span>Check performance breakdown for recent completed candidate interviews</span>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginTop: '0.35rem' }}>
+              <Link href="/admin/interviews" className="zentra-prompt-input-box" style={{ textDecoration: 'none', flex: '1 1 160px' }}>
+                <span>Review Interviews &rarr;</span>
+              </Link>
+              <Link href="/admin/analytics" className="zentra-prompt-input-box" style={{ textDecoration: 'none', flex: '1 1 160px' }}>
+                <span>Full Analytics &rarr;</span>
+              </Link>
+              <Link href="/admin/knowledge-base" className="zentra-prompt-input-box" style={{ textDecoration: 'none', flex: '1 1 160px' }}>
+                <span>Knowledge Base &rarr;</span>
+              </Link>
             </div>
           </div>
         </div>
@@ -225,7 +238,9 @@ export default async function AdminDashboardPage() {
               <h2 className="zentra-card-title">Interview Distribution</h2>
               <span style={{ fontSize: '0.8rem', color: 'var(--zentra-text-muted)' }}>Assessment modes &amp; completion</span>
             </div>
-            <span className="zentra-dot-menu">&bull;&bull;&bull;</span>
+            <Link href="/admin/interviews" style={{ fontSize: '0.78rem', fontWeight: 600, color: 'var(--zentra-text-muted)', textDecoration: 'none' }}>
+              Sessions &rarr;
+            </Link>
           </div>
 
           <div style={{ marginBottom: '1.5rem' }}>
